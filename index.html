@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Petros Space Adventure</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Bangers&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <canvas id="space-bg"></canvas>
+
+  <div class="menu-wrap" id="menu-wrap">
+    <div class="title-block">
+      <h1 class="title">PETROS</h1>
+      <p class="subtitle">SPACE ADVENTURE</p>
+      <button class="start-btn" id="start-btn" type="button">START</button>
+      <button class="controls-btn" id="controls-btn" type="button">CONTROLS</button>
+      <input class="player-name-input" id="player-name" type="text" maxlength="14" placeholder="PLAYER NAME" autocomplete="off" />
+      <div class="admin-code"><input id="admin-code" type="text" placeholder="ADMIN CODE" autocomplete="off" /><button id="admin-submit" type="button">OK</button><small id="admin-status"></small></div>
+    </div>
+  </div>
+  <div class="controls-panel" id="controls-panel" aria-hidden="true">
+    <div class="controls-card">
+      <button class="controls-close" id="controls-close" type="button" aria-label="Close controls">×</button>
+      <h2>CONTROLS</h2>
+      <p><span>W A S D</span> Move ship</p>
+      <p><span>ARROW KEYS</span> Shoot direction</p>
+      <p><span>PRESS SPACE</span> Super attack</p>
+      <p><span>HOLD SPACE</span> Shrink ship</p>
+      <p><span>ESC</span> Pause game</p>
+    </div>
+  </div>
+
+  <div class="loading-screen hidden" id="loading-screen">
+    <div class="loading-inner">
+      <p class="loading-text">LOADING</p>
+      <div class="loading-bar"><div class="loading-fill"></div></div>
+    </div>
+  </div>
+
+  <div class="game-ui" id="game-ui" aria-hidden="true">
+    <div class="hud">
+      <span>SCORE <strong id="score">000000</strong></span>
+      <span>HP <strong id="lives">3</strong></span>
+    </div>
+    <div class="boss-health" id="boss-health"><span>MERCURY</span><div class="boss-track"><div class="boss-fill" id="boss-fill"></div></div></div>
+    <div class="super-meter"><span>SUPER</span><div class="super-track"><div class="super-fill" id="super-fill"></div></div></div>
+    <div class="game-message" id="game-message"></div>
+    <div class="wave-clear-message" id="wave-clear-message"></div>
+    <button class="try-again-btn" id="try-again-btn" type="button">TRY AGAIN</button>
+  </div>
+  <div class="damage-flash" id="damage-flash"></div>
+  <div class="boss-intro" id="boss-intro"><div class="boss-intro-card"><div id="boss-player-name">PLAYER</div><div class="versus">VS</div><div class="mercury-name">MERCURY</div><button id="continue-boss" type="button">CONTINUE</button></div></div>
+
+  <div class="victory-screen" id="victory-screen" aria-hidden="true">
+    <div class="victory-card">
+      <div class="victory-title">CONGRATULATIONS</div>
+      <div class="victory-player" id="victory-player-name">PLAYER</div>
+      <div class="victory-text">You defeated MERCURY!</div>
+      <div class="victory-bonus">+1 HP</div>
+      <button id="victory-continue" type="button">CONTINUE</button>
+    </div>
+  </div>
+
+  <script src="main.js?v=13"></script>
+</body>
+</html>
