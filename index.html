@@ -14,7 +14,15 @@
   <canvas id="space-bg"></canvas>
   <div class="crt-overlay" aria-hidden="true"></div>
 
-  <div class="menu-wrap" id="menu-wrap">
+  <!-- Title card, shown once before the menu -->
+  <div class="credits-screen" id="credits-screen">
+    <div class="credits-inner">
+      <p class="credits-names"><span>DANIEL</span> <em>AND</em> <span>PETROS</span></p>
+      <p class="credits-present">PRESENT<i>.</i><i>.</i><i>.</i><i>.</i><i>.</i></p>
+    </div>
+  </div>
+
+  <div class="menu-wrap hidden" id="menu-wrap">
     <div class="title-block">
       <h1 class="title" data-text="PETROS">PETROS</h1>
       <p class="subtitle">SPACE ADVENTURE</p>
@@ -25,6 +33,7 @@
       <div class="admin-code"><input id="admin-code" type="text" placeholder="ADMIN CODE" autocomplete="off" /><button id="admin-submit" type="button">OK</button><small id="admin-status"></small></div>
     </div>
   </div>
+
   <div class="controls-panel" id="controls-panel" aria-hidden="true">
     <div class="controls-card">
       <button class="controls-close" id="controls-close" type="button" aria-label="Close controls">×</button>
@@ -36,6 +45,7 @@
       <p><span>ESC</span> Pause game</p>
     </div>
   </div>
+
   <div class="controls-panel" id="weapons-panel" aria-hidden="true">
     <div class="weapons-card">
       <button class="controls-close" id="weapons-close" type="button" aria-label="Close weapons">×</button>
@@ -43,8 +53,8 @@
       <section class="loadout-section gun-section">
         <h3>PRIMARY GUN</h3>
         <div class="weapon-grid">
-          <button class="weapon-tile selected" data-weapon="blaster"><span class="tile-badge">EQUIPPED</span><span class="projectile-preview blaster-preview"></span><strong>BLASTER</strong><small>Default weapon</small></button>
-          <button class="weapon-tile" data-weapon="charge"><span class="tile-badge">EQUIPPED</span><span class="projectile-preview charge-preview"></span><strong>CHARGE</strong><small>Hold arrow, then release<br>Max damage: 5</small></button>
+          <button class="weapon-tile selected" data-weapon="blaster"><span class="tile-badge">EQUIPPED</span><span class="projectile-preview blaster-preview"></span><strong>BLASTER</strong><small>Fast, steady fire</small></button>
+          <button class="weapon-tile" data-weapon="charge"><span class="tile-badge">EQUIPPED</span><span class="projectile-preview charge-preview"></span><strong>CHARGE</strong><small>Hold arrow, then release<br>Ignites at max: 5 damage</small></button>
           <button class="weapon-tile" data-weapon="cone"><span class="tile-badge">EQUIPPED</span><span class="projectile-preview cone-preview"><i></i><i></i><i></i></span><strong>CONE</strong><small>Three shots<br>Slower fire rate</small></button>
         </div>
       </section>
@@ -52,8 +62,8 @@
         <h3>SUPER ATTACK</h3>
         <div class="weapon-grid">
           <button class="weapon-tile super-tile selected" data-super="bomb"><span class="tile-badge">EQUIPPED</span><span class="projectile-preview bomb-preview"></span><strong>BOMB</strong><small>Large blast</small></button>
-          <button class="weapon-tile super-tile" data-super="invincibility"><span class="tile-badge">EQUIPPED</span><span class="projectile-preview shield-preview"></span><strong>INVINCIBILITY</strong><small>5 seconds</small></button>
-          <button class="weapon-tile super-tile" data-super="void"><span class="tile-badge">EQUIPPED</span><span class="projectile-preview void-preview"></span><strong>VOID</strong><small>Pulls enemies in</small></button>
+          <button class="weapon-tile super-tile" data-super="invincibility"><span class="tile-badge">EQUIPPED</span><span class="projectile-preview shield-preview"></span><strong>SHIELD</strong><small>5 seconds of<br>invincibility</small></button>
+          <button class="weapon-tile super-tile" data-super="lance"><span class="tile-badge">EQUIPPED</span><span class="projectile-preview lance-preview"><i></i></span><strong>LANCE</strong><small>Piercing beam<br>Burns everything in line</small></button>
         </div>
       </section>
       <p class="loadout-summary">LOADOUT <strong id="loadout-summary-text">BLASTER + BOMB</strong></p>
@@ -69,29 +79,46 @@
 
   <div class="game-ui" id="game-ui" aria-hidden="true">
     <div class="hud">
-      <span>SCORE <strong id="score">000000</strong></span>
-      <span>HP <strong id="lives">3</strong></span><span>WAVE <strong id="wave-number">1</strong></span>
+      <div class="hud-slot hud-left"><div class="hearts" id="lives-hearts" aria-label="Health"></div></div>
+      <div class="hud-slot hud-center"><span class="hud-label">WAVE</span><strong class="wave-value" id="wave-number">1</strong></div>
+      <div class="hud-slot hud-right"><span class="hud-label">SCORE</span><strong class="score-value" id="score">000000</strong></div>
     </div>
     <div class="boss-health" id="boss-health"><span>MERCURY</span><div class="boss-track"><div class="boss-fill" id="boss-fill"></div></div></div>
     <div class="super-meter"><span>SUPER</span><div class="super-track"><div class="super-fill" id="super-fill"></div></div></div>
     <div class="game-message" id="game-message"></div>
     <div class="test-damage" id="test-damage"></div>
     <div class="charge-meter" id="charge-meter"><span>CHARGE</span><div class="charge-track"><div class="charge-fill" id="charge-fill"></div></div></div>
-    <div class="wave-clear-message" id="wave-clear-message"></div>
+    <div class="wave-banner" id="wave-banner"><span class="wave-banner-main" id="wave-banner-main"></span><span class="wave-banner-sub" id="wave-banner-sub"></span></div>
     <button class="try-again-btn" id="try-again-btn" type="button">TRY AGAIN</button>
     <button class="main-menu-btn" id="main-menu-btn" type="button">MAIN MENU</button>
   </div>
+
+  <!-- Pause -->
+  <div class="pause-screen" id="pause-screen" aria-hidden="true">
+    <div class="pause-card">
+      <h2>PAUSED</h2>
+      <button id="resume-btn" type="button">RESUME</button>
+      <button id="pause-menu-btn" class="ghost" type="button">MAIN MENU</button>
+      <p class="key-hint">PRESS <span>ESC</span> TO RESUME</p>
+    </div>
+  </div>
+
   <div class="damage-flash" id="damage-flash"></div>
   <div class="boss-intro" id="boss-intro"><div class="boss-intro-card"><div id="boss-player-name">PLAYER</div><div class="versus">VS</div><div class="mercury-name">MERCURY</div><button id="continue-boss" type="button">CONTINUE</button><p class="key-hint">PRESS <span>ENTER</span> OR <span>SPACE</span></p></div></div>
 
   <div class="victory-screen" id="victory-screen" aria-hidden="true">
+    <div class="victory-rays" aria-hidden="true"></div>
     <div class="victory-card">
-      <div class="victory-title">CONGRATULATIONS</div>
+      <div class="victory-badge"><span>★</span></div>
+      <div class="victory-title">MERCURY<br />DESTROYED</div>
       <div class="victory-player" id="victory-player-name">PLAYER</div>
-      <div class="victory-text">You defeated MERCURY!</div>
-      <div class="victory-bonus">+1 HP</div>
+      <div class="victory-stats">
+        <div class="victory-stat"><span>SCORE</span><strong id="victory-score">000000</strong></div>
+        <div class="victory-stat"><span>WAVES</span><strong id="victory-waves">5</strong></div>
+        <div class="victory-stat"><span>BONUS</span><strong class="bonus" id="victory-bonus">+1 <i class="heart-mini"></i></strong></div>
+      </div>
       <div class="victory-loadout" aria-label="Choose your loadout">
-        <div class="victory-loadout-label">CHOOSE LOADOUT</div>
+        <div class="victory-loadout-label">CHOOSE YOUR NEXT LOADOUT</div>
         <div class="victory-loadout-row">
           <button class="victory-choice selected" data-victory-weapon="blaster" type="button">BLASTER</button>
           <button class="victory-choice" data-victory-weapon="charge" type="button">CHARGE</button>
@@ -99,8 +126,8 @@
         </div>
         <div class="victory-loadout-row">
           <button class="victory-choice selected" data-victory-super="bomb" type="button">BOMB</button>
-          <button class="victory-choice" data-victory-super="invincibility" type="button">INVINCIBILITY</button>
-          <button class="victory-choice" data-victory-super="void" type="button">VOID</button>
+          <button class="victory-choice" data-victory-super="invincibility" type="button">SHIELD</button>
+          <button class="victory-choice" data-victory-super="lance" type="button">LANCE</button>
         </div>
       </div>
       <button id="victory-continue" type="button">CONTINUE</button>

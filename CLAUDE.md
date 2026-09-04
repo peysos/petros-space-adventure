@@ -7,8 +7,8 @@ no package manager — plain HTML + CSS + a single `<canvas>` game loop in vanil
 
 | File | Role |
 | --- | --- |
-| `index.html` | All DOM: menu, weapons/controls modals, loading screen, HUD, boss intro, victory screen. Loads `main.js?v=15` (bump the query string to bust cache). |
-| `main.js` | The entire game: state, render loop, physics, collisions, input, audio, UI wiring. |
+| `index.html` | All DOM: menu, weapons/controls modals, loading screen, HUD, boss intro, victory screen. Loads `main.js?v=16` (bump the query string to bust cache). |
+| `main.js` | The entire game: state, render loop, physics, collisions, input, music/SFX synthesis, UI wiring. |
 | `style.css` | Retro arcade-cabinet theme: CRT scanline overlay, pixel type, hard-edged chunky controls. Uses Bangers (title) and Press Start 2P (everything else) from Google Fonts. |
 | `favicon.svg` | Inline red "P" mark. |
 | `server.ps1` | PowerShell static file server on `http://localhost:8000`. `$root` is hardcoded to a Windows path and must be edited per machine. |
@@ -47,6 +47,28 @@ Each of these "draw" functions is really update + render fused: it advances posi
 resolves collisions, mutates score/lives, and paints, all in one pass. Timers are frame
 counts (`fireCooldown`, `playerInvulnerable = 90`, `enemyShotTimer`) rather than delta time.
 
+**Render scale.** The canvas backing store is *not* the viewport size. `applyRenderScale()`
+sizes it to the current quality tier's `maxPixels` budget, stretches it back over the screen
+with CSS, and bakes the ratio into the base transform — so every coordinate in the file stays
+in CSS pixels and no drawing code knows the difference. On a 4K display this is a 4x cut in
+pixels touched per frame, which is the single largest win available: what costs frame time in
+this game is fill rate, not op count. `image-rendering: pixelated` makes the upscale both the
+cheapest filter available and a deliberate look.
+
+Two consequences to respect: offscreen layers meant to be blitted 1:1 (the boss grid) are baked
+in *device* pixels and drawn under `ctx.setTransform(1,0,0,1,0,0)`; and nothing may assume
+`canvas.width === window.innerWidth`.
+
+**Adaptive quality.** `QUALITY_TIERS` (high/medium/low/potato) controls the pixel budget, glow
+sprites, the CRT overlay, particle counts and backdrop density. `sampleFrameCost()` keeps an
+exponential moving average of how long the game's own frame actually takes and steps the tier
+down when it exceeds `FRAME_BUDGET_MS`. It only climbs back if it has *never* had to drop —
+a machine sitting on the threshold would otherwise oscillate, and visible quality flicker is
+worse than staying on the cheaper tier. The tier is stamped on `<html data-quality>` so the CSS
+can drop its own expensive bits (the CRT overlay is full-screen and does *not* shrink with the
+render scale, so it is switched off below `medium`). `?quality=low` pins a tier and disables
+the tuning.
+
 **Fixed 60Hz timestep.** rAF calls `frame(now)`, not `draw(t)`. `frame` accumulates elapsed
 time and runs `draw` only on whole `STEP_MS` (1/60s) boundaries, so the frame-count timers
 above mean the same thing on every display. On a faster-than-60Hz screen the spare callbacks
@@ -54,7 +76,7 @@ return before clearing the canvas, which leaves the previous frame on screen; on
 it catches up by at most `MAX_CATCHUP_STEPS` (2), so a stall can never spiral. Anything new
 that is measured in frames just works — don't reintroduce a bare `requestAnimationFrame(draw)`.
 
-**Backdrop.** `drawStaticStars(t)` fills the whole viewport with pixel-square stars on three parallax layers, drifting downward and wrapping. Density scales with viewport area, capped at `MAX_BACKDROP_STARS` (1000) — a 4K screen otherwise asked for ~3500, each its own `fillStyle` write plus `fillRect`. The field is sorted by tint at init so the draw loop sets `fillStyle` six times per frame instead of once per star, and is respread by `resize()` so it always covers the screen edge to edge.
+**Backdrop.** `drawStaticStars(t)` fills the whole viewport with pixel-square stars on three parallax layers, drifting downward and wrapping. Density scales with viewport area and with `quality.stars`, capped at `MAX_BACKDROP_STARS` (1000) — a 4K screen otherwise asked for ~3500, each its own `fillStyle` write plus `fillRect`. The field is sorted by tint at init so the draw loop sets `fillStyle` six times per frame instead of once per star, and is respread by `resize()` so it always covers the screen edge to edge.
 
 **HUD is DOM, not canvas.** Score, lives, wave, super meter, charge meter, boss health, and
 all overlays are HTML elements. The canvas draws only the play field.
@@ -68,9 +90,12 @@ goes stale and silently swallows the next real write.
 
 ## Game flow
 
+0. Title card — "DANIEL AND PETROS PRESENT..." holds for `CREDITS_HOLD_MS` (2.6s), or a
+   click skips it, then `finishCredits()` reveals the menu.
 1. Menu → pick ship color, weapon, super → `START`.
 2. `showLoading(startGame)` plays a fake progress bar, then `startGame()` resets all state.
-3. Waves 1–4: `createEnemies()` spawns a 3×8 grid. Clearing all enemies advances the wave.
+3. Waves 1–4: `createEnemies()` builds the wave from `waveRoster(wave)`. Clearing every
+   enemy advances the wave; `showWaveBanner()` announces both the clear and the next wave.
 4. Wave 5 clear → `enterBossArea()` → boss intro card → `startBossFight()` (starts a
    `setInterval` bass loop as boss music).
 5. Boss **MERCURY** has 75 HP (`BOSS_MAX_HEALTH`). Enter/Space skip the intro card
@@ -78,6 +103,19 @@ goes stale and silently swallows the next real write.
 6. On defeat: `startBossDeath()` runs a ~175-frame sequence — chained surface blasts,
    then one big detonation at frame 126 that scatters debris — before `finishBossDeath()`
    grants `+1 HP`, sets `wave = 6` and opens `showVictory()`.
+
+### Mercury
+
+No rings — the planet is a lit sphere with rotating clipped craters, a terminator shadow, and
+**molten fissures** (`BOSS_CRACKS`, drawn in three passes: bloom, hot core, white centre) that
+open up as its health drains. Damage knocks chunks off: `spawnBossShards()` adds rock to a
+debris swarm that orbits on per-shard inclinations, drawn behind and in front of the body.
+The face tracks the ship — pupils follow the player, the body leans toward them, and it blinks
+on its own timer.
+
+It also **moves**: `bossDrift` sweeps it across the arena with a bias toward the player, and
+`bossBurstTimer` fires a slow ten-way radial burst roughly every 8 seconds. Both exist to deny
+static safe spots without raising the difficulty much — it's the first boss.
 
 ### Mercury's animation states
 
@@ -94,6 +132,24 @@ goes stale and silently swallows the next real write.
 applies damage, triggers the flash/shake and spawns debris. `bossParticles` (pixel squares)
 and `bossExplosions` (expanding rings) are the shared effect pools.
 
+## Enemies
+
+Three types, defined in `ENEMY_TYPES` and driven by `updateEnemy()` / `drawEnemy()`:
+
+| Type | HP | Behaviour |
+| --- | --- | --- |
+| `grunt` | 1 | Holds formation, bobs. Fires the shared slow **homing** shot on `enemyShotTimer`. |
+| `charger` | 2 | `idle → wind → dash → return` state machine. Telegraphs with a red ring, spits two **straight** shots on the wind-up, then lunges at where the player is standing. |
+| `turret` | 3 | Never moves. Barrel tracks the player; fires a three-way **straight** spread. |
+
+`waveRoster(n)` decides the mix (wave 2 introduces chargers, wave 3 turrets, wave 4 both);
+`WAVE_INTROS` supplies the banner subtitle that calls out what's new.
+
+**Why the mix matters:** the old game had only grunts firing bullets that homed forever but
+only while `y < H`, so a player could park in a corner and never be touched. Chargers come to
+you and turret spreads fill space, so no position is safe. `fireHomingShot()` now steers for a
+fixed 150-frame budget and then commits, which makes the tracking honest rather than infinite.
+
 ## Weapons and supers
 
 Primary weapon (`selectedWeapon`):
@@ -102,15 +158,20 @@ Primary weapon (`selectedWeapon`):
   projectile size `3–9`. Charge state lives in `chargeStartedAt` / `chargeDirection`.
 - `cone` — three shots at ±0.16 rad, `fireCooldown = 18`.
 
+At full charge the ship visibly catches fire (`drawChargeAura`), and the charged round
+leaves a flame trail.
+
 Super (`selectedSuper`), fired by a **short** Space tap when `superMeter >= 1`:
 - `bomb` — projectile with a 125px blast radius (15 damage to the boss).
-- `invincibility` — 300 frames of `playerInvulnerable` + `invincibilitySuperTimer`.
-- `void` — meant to pull enemies in; currently pushes a `superBombs` entry flagged
-  `void: true` that **nothing reads**, so it behaves as a plain bomb. Costs 40 damage to
-  charge instead of 20.
+- `invincibility` ("SHIELD") — 300 frames of `playerInvulnerable` + `invincibilitySuperTimer`.
+- `lance` — a piercing beam locked to the direction fired but anchored to the ship, so it
+  sweeps as you move. Lives `BEAM_FRAMES`, damages everything within `BEAM_HALF_WIDTH` of its
+  centre line every `BEAM_TICK` frames. Replaced the old `void` super, which was never
+  implemented — it spawned a bomb flagged `void: true` that nothing read.
 
 Meter math is in `updateSuperMeter()`: `(superDamage - lastSuperKills) / requiredDamage`,
-where `requiredDamage` is 20 (40 for void). `setSelectedSuper()` refunds half on a mid-game swap.
+with costs in `SUPER_COST` (20, 20, 30 for lance). `setSelectedSuper()` refunds half on a
+mid-game swap.
 
 ## Input
 
@@ -134,10 +195,32 @@ Typed into the ADMIN CODE box on the menu (`admin-submit` handler):
 
 ## Known rough edges
 
-- The `void` super is UI-only (see above).
 - `playerName` is set to `"PLAYER"` in `startGame()` and never entered anywhere, though the
   boss intro and victory screens display it.
 - `server.ps1` has a machine-specific hardcoded `$root` and no path-traversal guard — dev only.
+
+## Front end
+
+- **Theme.** `setTheme(hex)` writes `--theme` / `--theme-rgb` on the root element; those are the
+  only accent tokens the stylesheet reads, so picking a ship colour re-skins the title, buttons,
+  banners, pause card and wave banner to match.
+- **HUD.** Hearts (`setLives()`, rebuilt only when the count changes so the beat animation
+  doesn't restart), wave number centred, score right.
+- **Pause.** Escape calls `setPaused()`, which shows `#pause-screen` (RESUME / MAIN MENU) and
+  ducks the music. `returnToMenu()` is the single teardown path shared by the pause card and the
+  game-over button.
+
+## Music
+
+`music` is a self-contained step sequencer (`main.js`). A 25ms timer schedules notes
+`SCHEDULE_AHEAD` seconds in advance of the AudioContext clock — plain `setInterval` jitters
+audibly. Four tracks (`menu`, `battle`, `boss`, `victory`) are 16-step patterns per bar in MIDI
+numbers, played through synthesised voices: filtered saw/square bass with a sub, plucked arp,
+doubled lead, and noise-based kick/snare/hat. `victory` is `once: true` and stops itself.
+
+Everything routes through `musicGain` / `sfxGain` off one `ensureAudio()` context. Browsers
+block audio before a gesture, so `unlockAudio()` waits for the first click or keypress and then
+brings the menu track in.
 
 ## Loadout UI
 
@@ -152,9 +235,10 @@ menu button and panel footer. Nothing else touches the `.selected` class; go thr
 - Vanilla ES2020+ in the browser; no transpiling, no imports. Keep it that way.
 - Canvas state changes are wrapped in `ctx.save()` / `ctx.restore()` around
   `translate`/`rotate`; reset `ctx.shadowBlur = 0` after any glow.
-- Audio is generated on the fly with the WebAudio API via `playSound(freq, duration, type)`;
-  the `AudioContext` is created lazily on first START (browser autoplay policy) and every call
-  no-ops if it is null.
+- SFX are generated on the fly via `playSound(freq, duration, type)`; the `AudioContext` is
+  created lazily by `ensureAudio()` and every call no-ops if it is null.
+- `sparks` is the shared particle pool for every arena (thruster trails, charge flames, debris);
+  `bossParticles` / `bossExplosions` are boss-arena only.
 - Collisions are cheap: axis-aligned `Math.abs` box checks for enemies/bullets,
   `Math.hypot` circles for the boss and blasts.
 - **Nothing in the loop allocates.** Projectile lists are pruned with `compact(list, keep)`
@@ -168,6 +252,13 @@ menu button and panel footer. Nothing else touches the `.selected` class; go thr
   frame is expensive — reach for a cache first.
 - The canvas context is opaque (`alpha: false`) and always painted edge to edge; don't rely
   on transparency showing the page behind it.
+- **Never use `ctx.shadowBlur`.** It blurs the shape's bounding box in software on every
+  draw, every frame, and it was scattered across the bullet and boss paths. Use
+  `drawGlow(hexColor, radius, x, y)`, which blits a radial-gradient sprite baked once by
+  `glowSprite()` and is skipped entirely on the cheap tiers. It needs a `#rrggbb` literal.
+- Don't clear to black before something that repaints every pixel anyway — `draw()` skips the
+  clear when `drawBossArea`/`drawTestRoom` is about to fill the screen. A redundant
+  full-screen fill is the most expensive kind of no-op there is.
 - Colors are hardcoded hex literals per entity (player `playerColor`, enemies `#c77dff`,
   blaster `#ffdc5a`, cone `#63ff91`, charge `#ff8a32`, bombs `#63f7ff`).
 - After editing `main.js`, bump the `?v=` in `index.html`'s script tag.

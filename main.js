@@ -2,25 +2,63 @@ const canvas = document.getElementById("space-bg");
 // alpha:false lets the compositor skip blending the canvas against the page.
 const ctx = canvas.getContext("2d", { alpha: false, desynchronized: true });
 
+// W/H are always CSS pixels — every coordinate in this file is a CSS pixel, and
+// nothing below needs to know about the render scale.
 let W, H;
 let centerX, centerY;
 
+// ---------------------------------------------------------------------------
+// Quality tiers
+//
+// What costs frame time here is not JavaScript, it is how many pixels get
+// touched. A full-screen canvas on a 4K display is 8.3M pixels cleared, drawn
+// and composited 60 times a second, and a weak integrated GPU cannot do that at
+// any op count. So the canvas renders into a smaller backing store and the
+// browser scales it up — the cheapest possible win, and on a pixel-art game it
+// reads as intentional. `maxPixels` is the render budget for each tier.
+// ---------------------------------------------------------------------------
+const QUALITY_TIERS = [
+  { name: "high",   maxPixels: 2073600, glow: true,  crt: true,  particles: 1,    stars: 1    },
+  { name: "medium", maxPixels: 1310720, glow: true,  crt: true,  particles: 0.6,  stars: 0.6  },
+  { name: "low",    maxPixels: 921600,  glow: false, crt: false, particles: 0.35, stars: 0.4  },
+  { name: "potato", maxPixels: 480000,  glow: false, crt: false, particles: 0.15, stars: 0.2  },
+];
+let qualityIndex = 0;
+let quality = QUALITY_TIERS[0];
+let renderScale = 1;
+
 // The boss arena grid is identical every frame, so it is stroked once into an
-// offscreen layer and blitted with a single drawImage instead of re-pathing
-// ~100 lines per frame.
+// offscreen layer (at device resolution) and blitted with a single drawImage
+// instead of re-pathing ~100 lines per frame.
 const bossGridLayer = document.createElement("canvas");
 const bossGridCtx = bossGridLayer.getContext("2d");
 
 let resizePending = false;
 
+// Sizes the backing store to the tier's pixel budget while CSS keeps the canvas
+// full-screen, then bakes the scale into the base transform so all the drawing
+// code below can keep working in CSS pixels.
+function applyRenderScale() {
+  renderScale = Math.min(1, Math.sqrt(quality.maxPixels / Math.max(1, W * H)));
+  renderScale = Math.max(0.25, renderScale);
+  canvas.width = Math.max(1, Math.round(W * renderScale));
+  canvas.height = Math.max(1, Math.round(H * renderScale));
+  canvas.style.width = W + "px";
+  canvas.style.height = H + "px";
+  ctx.setTransform(renderScale, 0, 0, renderScale, 0, 0);
+  // nearest-neighbour is both the cheapest upscale filter and the right look
+  ctx.imageSmoothingEnabled = false;
+}
+
 // Called from the init block at the bottom, once every declaration below exists.
 function resize() {
-  W = canvas.width = window.innerWidth;
-  H = canvas.height = window.innerHeight;
+  W = window.innerWidth;
+  H = window.innerHeight;
   centerX = W / 2;
   centerY = H / 2;
-  bossGridLayer.width = W;
-  bossGridLayer.height = H;
+  applyRenderScale();
+  bossGridLayer.width = canvas.width;
+  bossGridLayer.height = canvas.height;
   bakeBossGrid();
   // the backdrop is viewport-sized, so respread it to keep full coverage
   initStaticStars();
@@ -32,14 +70,70 @@ window.addEventListener("resize", function () {
   requestAnimationFrame(function () { resizePending = false; resize(); });
 });
 
+function setQuality(index) {
+  const next = Math.max(0, Math.min(QUALITY_TIERS.length - 1, index));
+  if (next === qualityIndex) return;
+  qualityIndex = next;
+  quality = QUALITY_TIERS[next];
+  document.documentElement.dataset.quality = quality.name;
+  resize();
+}
+
+// Baked in device pixels and blitted under the identity transform, so the grid
+// costs one drawImage however big the window is.
 function bakeBossGrid() {
-  bossGridCtx.clearRect(0, 0, W, H);
+  const step = 50 * renderScale;
+  const gw = bossGridLayer.width;
+  const gh = bossGridLayer.height;
+  bossGridCtx.clearRect(0, 0, gw, gh);
   bossGridCtx.strokeStyle = "rgba(180, 80, 255, 0.16)";
   bossGridCtx.lineWidth = 1;
   bossGridCtx.beginPath();
-  for (let x = 0; x < W; x += 50) { bossGridCtx.moveTo(x, 0); bossGridCtx.lineTo(x, H); }
-  for (let y = 0; y < H; y += 50) { bossGridCtx.moveTo(0, y); bossGridCtx.lineTo(W, y); }
+  for (let x = 0; x < gw; x += step) { bossGridCtx.moveTo(x, 0); bossGridCtx.lineTo(x, gh); }
+  for (let y = 0; y < gh; y += step) { bossGridCtx.moveTo(0, y); bossGridCtx.lineTo(gw, y); }
   bossGridCtx.stroke();
+}
+
+// ---------------------------------------------------------------------------
+// Glow sprites
+//
+// `ctx.shadowBlur` is by far the most expensive call in the 2D API: it blurs the
+// shape's bounding box in software, every shape, every frame. These bake the
+// same look into a small radial-gradient bitmap once, so a glowing bullet costs
+// one drawImage instead of a blur pass.
+// ---------------------------------------------------------------------------
+const glowSprites = new Map();
+
+function rgbaFromHex(hex, alpha) {
+  const value = parseInt(hex.slice(1), 16);
+  return `rgba(${(value >> 16) & 255}, ${(value >> 8) & 255}, ${value & 255}, ${alpha})`;
+}
+
+function glowSprite(color, radius) {
+  const key = color + "|" + radius;
+  let sprite = glowSprites.get(key);
+  if (sprite) return sprite;
+  const size = Math.max(8, Math.ceil(radius * 4));
+  sprite = document.createElement("canvas");
+  sprite.width = size;
+  sprite.height = size;
+  const half = size / 2;
+  const g = sprite.getContext("2d");
+  const gradient = g.createRadialGradient(half, half, 0, half, half, half);
+  gradient.addColorStop(0, rgbaFromHex(color, 0.85));
+  gradient.addColorStop(0.35, rgbaFromHex(color, 0.35));
+  gradient.addColorStop(1, rgbaFromHex(color, 0));
+  g.fillStyle = gradient;
+  g.fillRect(0, 0, size, size);
+  glowSprites.set(key, sprite);
+  return sprite;
+}
+
+function drawGlow(color, radius, x, y) {
+  if (!quality.glow) return;
+  const sprite = glowSprite(color, radius);
+  const half = sprite.width / 2;
+  ctx.drawImage(sprite, x - half, y - half);
 }
 
 const STAR_COUNT = 260;
@@ -95,7 +189,6 @@ let selectedSuper = "bomb";
 let chargeStartedAt = 0;
 let chargeDirection = { x: 0, y: -1 };
 let lastArrowDirection = { x: 0, y: -1 };
-let bossMusicTimer = null;
 let boss = { x: 0, y: 180, health: 75 };
 let bossShotTimer = 30;
 let bossDefeated = false;
@@ -110,6 +203,12 @@ let bossExplosions = [];
 let bossDying = false;
 let bossDeathTimer = 0;
 let bossSpin = 0;
+let bossShards = [];
+let bossDamageStage = 0;
+let bossBlink = 0;
+let bossBlinkTimer = 200;
+let bossDrift = 0;
+let bossBurstTimer = 420;
 let score = 0;
 let lives = 3;
 let wave = 1;
@@ -127,6 +226,8 @@ let superMeter = 0;
 let lastSuperKills = 0;
 let facing = { x: 0, y: -1 };
 let superBombs = [];
+let superBeam = null;
+let sparks = [];
 let audioContext = null;
 let spaceDownAt = 0;
 let suppressSpaceRelease = false;
@@ -138,8 +239,14 @@ const ARROW_VECTORS = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1]
 // Resolving them once removes thousands of getElementById calls per second.
 const dom = {
   score: document.getElementById("score"),
-  lives: document.getElementById("lives"),
+  hearts: document.getElementById("lives-hearts"),
   waveNumber: document.getElementById("wave-number"),
+  superMeter: document.querySelector(".super-meter"),
+  waveBanner: document.getElementById("wave-banner"),
+  waveBannerMain: document.getElementById("wave-banner-main"),
+  waveBannerSub: document.getElementById("wave-banner-sub"),
+  pauseScreen: document.getElementById("pause-screen"),
+  gameMessage: document.getElementById("game-message"),
   superFill: document.getElementById("super-fill"),
   chargeMeter: document.getElementById("charge-meter"),
   chargeFill: document.getElementById("charge-fill"),
@@ -209,8 +316,8 @@ function initStars() {
 
 function initStaticStars() {
   staticStars = [];
-  const scaled = Math.round(W * H * STAR_DENSITY);
-  const count = Math.min(MAX_BACKDROP_STARS, Math.max(MIN_BACKDROP_STARS, scaled));
+  const scaled = Math.round(W * H * STAR_DENSITY * quality.stars);
+  const count = Math.min(MAX_BACKDROP_STARS, Math.max(60, Math.round(MIN_BACKDROP_STARS * quality.stars), scaled));
   for (let i = 0; i < count; i++) staticStars.push(makeBackdropStar(Math.random() * H));
   // Sorted by tint so the draw loop writes fillStyle six times per frame instead
   // of once per star. Stars are interchangeable, so the ordering costs nothing.
@@ -331,6 +438,36 @@ let stepAccumulator = 0;
 // fixed 60Hz: driven straight off rAF it ran ~2.4x too fast on a 144Hz display
 // and crawled on a slow one. When the display outruns 60Hz the spare callbacks
 // return before clearing, so the canvas simply keeps the frame it already has.
+// --- adaptive quality -------------------------------------------------------
+// A fixed set of effects can't suit both a gaming desktop and a school laptop,
+// so the game measures how long its own frame actually takes and steps the tier
+// down when it can't keep up. It only climbs back if it never had to drop:
+// otherwise a machine sitting near the threshold would oscillate, and a visible
+// quality flicker is worse than simply staying on the cheaper tier.
+const FRAME_BUDGET_MS = 9;
+const FRAME_COMFORT_MS = 3.5;
+const QUALITY_WINDOW = 150;
+let frameCostAvg = 0;
+let qualitySamples = 0;
+let qualityDropped = false;
+let qualityPinned = false;
+
+function sampleFrameCost(ms) {
+  if (qualityPinned) return;
+  // exponential moving average, so one slow frame can't retune the whole game
+  frameCostAvg = frameCostAvg === 0 ? ms : frameCostAvg + (ms - frameCostAvg) * 0.05;
+  if (++qualitySamples < QUALITY_WINDOW) return;
+  qualitySamples = 0;
+  if (frameCostAvg > FRAME_BUDGET_MS && qualityIndex < QUALITY_TIERS.length - 1) {
+    qualityDropped = true;
+    setQuality(qualityIndex + 1);
+    frameCostAvg = 0;
+  } else if (!qualityDropped && frameCostAvg < FRAME_COMFORT_MS && qualityIndex > 0) {
+    setQuality(qualityIndex - 1);
+    frameCostAvg = 0;
+  }
+}
+
 function frame(now) {
   requestAnimationFrame(frame);
   if (!lastFrameTime) lastFrameTime = now;
@@ -343,12 +480,19 @@ function frame(now) {
     stepAccumulator -= STEP_MS;
     steps++;
   }
+  const startedAt = performance.now();
   for (let i = 0; i < steps; i++) draw(now);
+  sampleFrameCost((performance.now() - startedAt) / steps);
 }
 
 function draw(t) {
-  ctx.fillStyle = "#000000";
-  ctx.fillRect(0, 0, W, H);
+  // drawBossArea/drawTestRoom fill every pixel themselves, so clearing to black
+  // first is a second full-screen fill for nothing — the priciest kind of no-op.
+  const arenaRepaints = gameActive && !gamePaused && !bossIntro && (bossMode || testMode);
+  if (!arenaRepaints) {
+    ctx.fillStyle = "#000000";
+    ctx.fillRect(0, 0, W, H);
+  }
   centerX = W / 2;
   centerY = H / 2;
   if (!gameActive) drawStaticStars(t);
@@ -358,21 +502,340 @@ function draw(t) {
   setText(dom.waveNumber, String(wave));
 }
 
+// ---------------------------------------------------------------------------
+// Enemies
+//
+// Three kinds, so a wave has a shape instead of a grid:
+//   grunt   — holds formation, fires the slow homing shot
+//   charger — winds up, then dashes at where the player is standing, and spits
+//             straight (non-homing) shots on the way in
+//   turret  — armoured, never moves, fires a wide non-homing spread
+// Chargers and turrets are what close the old "stand in this corner and never
+// get hit" gap: one comes to you, the other fills space you aren't standing in.
+// ---------------------------------------------------------------------------
+const ENEMY_TYPES = {
+  grunt:   { w: 22, h: 16, health: 1, score: 100, color: "#c77dff" },
+  charger: { w: 20, h: 20, health: 2, score: 175, color: "#ff7a4f" },
+  turret:  { w: 26, h: 22, health: 3, score: 250, color: "#5ad1c0" },
+};
+
+function makeEnemy(type, x, y, phase) {
+  const spec = ENEMY_TYPES[type];
+  return {
+    type,
+    x, y,
+    homeX: x,
+    homeY: y,
+    w: spec.w,
+    h: spec.h,
+    alive: true,
+    health: spec.health,
+    maxHealth: spec.health,
+    phase,
+    hitFlash: 0,
+    state: "idle",
+    timer: Math.round(rand(90, 260)),
+    vx: 0,
+    vy: 0,
+    aimX: 0,
+    aimY: 1,
+    spin: rand(0, Math.PI * 2),
+  };
+}
+
+// Per-wave roster. Waves past the boss keep escalating from the same shapes.
+function waveRoster(number) {
+  if (number === 1) return { rows: 3, cols: 8, chargers: 0, turrets: 0 };
+  if (number === 2) return { rows: 2, cols: 8, chargers: 2, turrets: 0 };
+  if (number === 3) return { rows: 2, cols: 8, chargers: 1, turrets: 2 };
+  if (number === 4) return { rows: 2, cols: 7, chargers: 3, turrets: 2 };
+  if (number === 5) return { rows: 3, cols: 8, chargers: 3, turrets: 2 };
+  const past = number - 5;
+  return {
+    rows: 3,
+    cols: 8,
+    chargers: Math.min(6, 3 + past),
+    turrets: Math.min(4, 2 + Math.floor(past / 2)),
+  };
+}
+
+const WAVE_INTROS = {
+  2: "CHARGERS INBOUND",
+  3: "TURRETS DEPLOYED",
+  4: "MIXED ASSAULT",
+  5: "FINAL WAVE BEFORE MERCURY",
+};
+
 function createEnemies() {
   enemies = [];
-  for (let row = 0; row < 3; row++) {
-    for (let col = 0; col < 8; col++) {
-      enemies.push({
-        x: W / 2 - 280 + col * 80,
-        y: 120 + row * 62,
-        w: 22,
-        h: 16,
-        alive: true,
-        health: 1,
-        phase: col * 0.4 + row,
-      });
+  const roster = waveRoster(wave);
+  const spacing = Math.min(80, (W - 160) / Math.max(1, roster.cols));
+  const rowWidth = spacing * (roster.cols - 1);
+  for (let row = 0; row < roster.rows; row++) {
+    for (let col = 0; col < roster.cols; col++) {
+      enemies.push(makeEnemy("grunt", W / 2 - rowWidth / 2 + col * spacing, 120 + row * 62, col * 0.4 + row));
     }
   }
+  for (let i = 0; i < roster.turrets; i++) {
+    const spread = roster.turrets === 1 ? 0 : (i / (roster.turrets - 1) - 0.5) * 2;
+    enemies.push(makeEnemy("turret", W / 2 + spread * Math.min(360, W * 0.34), 84, i * 1.3));
+  }
+  for (let i = 0; i < roster.chargers; i++) {
+    const spread = roster.chargers === 1 ? 0 : (i / (roster.chargers - 1) - 0.5) * 2;
+    enemies.push(makeEnemy("charger", W / 2 + spread * Math.min(300, W * 0.3), 120 + roster.rows * 62 + 10, i * 0.9));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Sparks
+//
+// A single pooled particle list shared by every arena — thruster trails, charge
+// flames, enemy debris, beam scatter. Squares, because they cost one fillRect
+// and read as pixels.
+// ---------------------------------------------------------------------------
+const MAX_SPARKS = 260;
+
+function spawnSparks(x, y, count, color, options) {
+  const opts = options || {};
+  const budget = Math.max(1, Math.round(count * quality.particles));
+  for (let i = 0; i < budget && sparks.length < MAX_SPARKS; i++) {
+    const angle = opts.angle === undefined ? rand(0, Math.PI * 2) : opts.angle + rand(-(opts.spread || 0.6), opts.spread || 0.6);
+    const speed = rand(opts.minSpeed || 0.4, opts.maxSpeed || 2.6);
+    const life = Math.round(rand((opts.life || 24) * 0.55, opts.life || 24));
+    sparks.push({
+      x: x + rand(-3, 3),
+      y: y + rand(-3, 3),
+      vx: Math.cos(angle) * speed + (opts.driftX || 0),
+      vy: Math.sin(angle) * speed + (opts.driftY || 0),
+      life,
+      maxLife: life,
+      size: Math.round(rand(opts.minSize || 1, opts.maxSize || 3)),
+      color,
+      drag: opts.drag === undefined ? 0.94 : opts.drag,
+      gravity: opts.gravity || 0,
+    });
+  }
+}
+
+function updateSparks() {
+  let lastColor = "";
+  for (const s of sparks) {
+    s.x += s.vx;
+    s.y += s.vy;
+    s.vx *= s.drag;
+    s.vy = s.vy * s.drag + s.gravity;
+    s.life--;
+    ctx.globalAlpha = Math.max(0, s.life / s.maxLife);
+    if (s.color !== lastColor) { lastColor = s.color; ctx.fillStyle = s.color; }
+    ctx.fillRect(Math.round(s.x), Math.round(s.y), s.size, s.size);
+  }
+  ctx.globalAlpha = 1;
+  compact(sparks, (s) => s.life > 0);
+}
+
+// ---------------------------------------------------------------------------
+// LANCE — the super that replaced VOID
+//
+// A beam locked to the direction you fired it, anchored to the ship so it sweeps
+// as you move. It pierces everything, which is what the other two supers don't
+// do: BOMB is a point blast, SHIELD is defensive, LANCE is a line.
+// ---------------------------------------------------------------------------
+const BEAM_FRAMES = 52;
+const BEAM_HALF_WIDTH = 17;
+const BEAM_TICK = 8;
+
+function fireLance() {
+  superBeam = { angle: Math.atan2(facing.y, facing.x), life: BEAM_FRAMES };
+  playSound(1200, 0.25, "sawtooth");
+  playSound(300, 0.5, "square");
+  spawnSparks(player.x, player.y, 26, "#b9f0ff", {
+    angle: superBeam.angle, spread: 0.5, minSpeed: 2, maxSpeed: 7, life: 26, maxSize: 4,
+  });
+}
+
+// Perpendicular distance from the beam's centre line, or Infinity behind the ship.
+function beamDistance(px, py) {
+  const dx = px - player.x;
+  const dy = py - player.y;
+  const cos = Math.cos(superBeam.angle);
+  const sin = Math.sin(superBeam.angle);
+  if (dx * cos + dy * sin < 0) return Infinity;
+  return Math.abs(-dx * sin + dy * cos);
+}
+
+function damageAlongBeam(enemy, ey) {
+  if (superBeam.life % BEAM_TICK !== 0) return;
+  if (beamDistance(enemy.x, ey) < BEAM_HALF_WIDTH + enemy.w * 0.6) {
+    damageEnemy(enemy, 2);
+    spawnSparks(enemy.x, ey, 5, "#b9f0ff", { life: 16 });
+  }
+}
+
+function updateSuperBeam(t) {
+  if (!superBeam) return;
+  const progress = 1 - superBeam.life / BEAM_FRAMES;
+  // snaps open, holds, then collapses
+  const width = progress < 0.12
+    ? (progress / 0.12) * BEAM_HALF_WIDTH
+    : BEAM_HALF_WIDTH * (1 - Math.max(0, (progress - 0.7) / 0.3));
+  const length = W + H;
+  const flicker = 0.85 + Math.sin(t * 0.08) * 0.15;
+
+  ctx.save();
+  ctx.translate(player.x, player.y);
+  ctx.rotate(superBeam.angle);
+  ctx.globalCompositeOperation = "lighter";
+  ctx.fillStyle = `rgba(70, 190, 255, ${(0.22 * flicker).toFixed(3)})`;
+  ctx.fillRect(0, -width * 2.1, length, width * 4.2);
+  ctx.fillStyle = `rgba(150, 235, 255, ${(0.5 * flicker).toFixed(3)})`;
+  ctx.fillRect(0, -width, length, width * 2);
+  ctx.fillStyle = `rgba(255, 255, 255, ${flicker.toFixed(3)})`;
+  ctx.fillRect(0, -width * 0.42, length, width * 0.84);
+  ctx.globalCompositeOperation = "source-over";
+  ctx.restore();
+
+  drawGlow("#7fe4ff", 30, player.x, player.y);
+  if (superBeam.life % 3 === 0) {
+    spawnSparks(player.x, player.y, 2, "#b9f0ff", {
+      angle: superBeam.angle, spread: 1.1, minSpeed: 1, maxSpeed: 4, life: 18,
+    });
+  }
+  superBeam.life--;
+  if (superBeam.life <= 0) superBeam = null;
+}
+
+// ---------------------------------------------------------------------------
+// Charge weapon: the ship visibly heats up, and catches fire at full charge.
+// ---------------------------------------------------------------------------
+const CHARGE_FULL_MS = 2500;
+
+function chargeRatio() {
+  if (!chargeStartedAt) return 0;
+  return Math.min(1, (performance.now() - chargeStartedAt) / CHARGE_FULL_MS);
+}
+
+function drawChargeAura(t) {
+  const ratio = chargeRatio();
+  if (ratio <= 0) return;
+  const full = ratio >= 1;
+  const radius = (player.shrunk ? 22 : 32) * (1.35 - ratio * 0.35);
+  const pulse = Math.sin(t * (full ? 0.03 : 0.012)) * (full ? 3 : 1.5);
+  const color = full ? "#ff4d1a" : ratio > 0.62 ? "#ff9d32" : "#63ff91";
+
+  // gathering ring
+  ctx.strokeStyle = color;
+  ctx.globalAlpha = 0.35 + ratio * 0.5;
+  ctx.lineWidth = 2 + ratio * 2;
+  ctx.beginPath(); ctx.arc(player.x, player.y, radius + pulse, 0, Math.PI * 2); ctx.stroke();
+  ctx.globalAlpha = 1;
+  drawGlow(color, Math.round(18 + ratio * 22), player.x, player.y);
+
+  // embers spiral inward the whole time; at full charge the ship is alight
+  const emberCount = full ? 3 : ratio > 0.5 ? 1 : 0;
+  for (let i = 0; i < emberCount; i++) {
+    const a = rand(0, Math.PI * 2);
+    const r = radius + rand(6, 20);
+    spawnSparks(player.x + Math.cos(a) * r, player.y + Math.sin(a) * r, 1,
+      full ? (Math.random() < 0.4 ? "#fff3c4" : "#ff6a20") : "#9dffc0",
+      { angle: a + Math.PI, spread: 0.4, minSpeed: 0.8, maxSpeed: 2.2, life: 22, drag: 0.9 });
+  }
+  if (full) {
+    // flame tongues licking off the hull
+    const flames = 5;
+    ctx.globalCompositeOperation = "lighter";
+    for (let i = 0; i < flames; i++) {
+      const a = (i / flames) * Math.PI * 2 + t * 0.006;
+      const wobble = 1 + Math.sin(t * 0.05 + i) * 0.35;
+      const fx = player.x + Math.cos(a) * radius * 0.8;
+      const fy = player.y + Math.sin(a) * radius * 0.8;
+      ctx.fillStyle = i % 2 ? "rgba(255, 106, 32, 0.5)" : "rgba(255, 214, 90, 0.45)";
+      ctx.beginPath();
+      ctx.ellipse(fx, fy, 7 * wobble, 12 * wobble, a + Math.PI / 2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalCompositeOperation = "source-over";
+  }
+}
+
+// A slow shot that steers toward the player for a limited window and then
+// commits. The old version homed forever but only while `y < H`, which is what
+// let a player park in a corner and watch shots curve harmlessly past.
+function fireHomingShot(x, y, speed) {
+  const angle = Math.atan2(player.y - y, player.x - x);
+  enemyBullets.push({
+    x, y,
+    vx: Math.cos(angle) * speed,
+    vy: Math.sin(angle) * speed,
+    speed,
+    turnRate: 0.05,
+    homing: 150,
+    kind: "homing",
+  });
+}
+
+// Dumb-fire: aimed once, then straight forever. Chargers and turrets use these,
+// so there is always something on screen that cannot be walked away from.
+function fireStraightShot(x, y, angle, speed) {
+  enemyBullets.push({
+    x, y,
+    vx: Math.cos(angle) * speed,
+    vy: Math.sin(angle) * speed,
+    speed,
+    turnRate: 0,
+    homing: 0,
+    kind: "straight",
+  });
+}
+
+function updateEnemyBullets() {
+  for (const bullet of enemyBullets) {
+    let nextAngle = Math.atan2(bullet.vy, bullet.vx);
+    if (bullet.homing > 0) {
+      bullet.homing--;
+      const targetAngle = Math.atan2(player.y - bullet.y, player.x - bullet.x);
+      let angleDiff = targetAngle - nextAngle;
+      angleDiff = Math.atan2(Math.sin(angleDiff), Math.cos(angleDiff));
+      nextAngle += Math.max(-bullet.turnRate, Math.min(bullet.turnRate, angleDiff));
+      bullet.vx = Math.cos(nextAngle) * bullet.speed;
+      bullet.vy = Math.sin(nextAngle) * bullet.speed;
+    }
+    bullet.x += bullet.vx;
+    bullet.y += bullet.vy;
+    ctx.save();
+    ctx.translate(bullet.x, bullet.y);
+    ctx.rotate(nextAngle + Math.PI / 2);
+    if (bullet.kind === "straight") {
+      ctx.fillStyle = "#ffb03a";
+      ctx.fillRect(-3, -5, 6, 10);
+      ctx.fillStyle = "#fff2c9";
+      ctx.fillRect(-1, -5, 2, 10);
+    } else {
+      ctx.fillStyle = "#ff6b8a";
+      ctx.fillRect(-2, -6, 4, 12);
+      ctx.fillStyle = "#ffd0dc";
+      ctx.fillRect(-1, -6, 2, 5);
+    }
+    ctx.restore();
+    const hitWidth = player.shrunk ? 13 : 22;
+    const hitHeight = player.shrunk ? 14 : 24;
+    if (!adminInvincible && playerInvulnerable === 0 && Math.abs(bullet.x - player.x) < hitWidth && Math.abs(bullet.y - player.y) < hitHeight) {
+      hurtPlayer();
+      bullet.y = H + 200;
+      if (!gameActive) return;
+    }
+  }
+  compact(enemyBullets, (b) => b.y < H + 30 && b.y > -60 && b.x > -60 && b.x < W + 60);
+}
+
+// One place to lose a heart, so the flash, the i-frames and the HUD can never
+// disagree with each other.
+function hurtPlayer() {
+  lives--;
+  flashDamage();
+  playerInvulnerable = 90;
+  setLives(lives);
+  playSound(120, 0.25, "sawtooth");
+  if (lives <= 0) endGame();
 }
 
 function drawGame(t) {
@@ -438,11 +901,9 @@ function drawGame(t) {
         break;
       }
     }
+    drawGlow("#63f7ff", 18, bomb.x, bomb.y);
     ctx.fillStyle = "#63f7ff";
-    ctx.shadowColor = "#63f7ff";
-    ctx.shadowBlur = 18;
     ctx.beginPath(); ctx.arc(bomb.x, bomb.y, 9, 0, Math.PI * 2); ctx.fill();
-    ctx.shadowBlur = 0;
     if (bomb.life <= 0 || bomb.x < 0 || bomb.x > W || bomb.y < 0 || bomb.y > H) bomb.explode = true;
   }
   for (const bomb of superBombs) {
@@ -460,6 +921,8 @@ function drawGame(t) {
   }
   compact(superBombs, (b) => !b.explode);
   updateSuperMeter();
+  updateSuperBeam(t);
+  drawChargeAura(t);
   const shipScale = player.shrunk ? 0.55 : 1;
   ctx.save();
   ctx.translate(player.x, player.y);
@@ -494,8 +957,17 @@ function drawGame(t) {
     ctx.translate(bullet.x, bullet.y);
     ctx.rotate(Math.atan2(bullet.vy, bullet.vx) + Math.PI / 2);
     if (bullet.type === "charge") {
-      ctx.fillStyle = "#ff8a32"; ctx.shadowColor = "#ff8a32"; ctx.shadowBlur = 12;
-      ctx.beginPath(); ctx.arc(0, 0, bullet.size, 0, Math.PI * 2); ctx.fill(); ctx.shadowBlur = 0;
+      const hot = (bullet.damage || 1) >= 4;
+      drawGlow(hot ? "#ff4d1a" : "#ff8a32", hot ? 20 : 12, 0, 0);
+      ctx.fillStyle = hot ? "#ff5a1e" : "#ff8a32";
+      ctx.beginPath(); ctx.arc(0, 0, bullet.size, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "#fff3c4";
+      ctx.beginPath(); ctx.arc(0, 0, bullet.size * 0.45, 0, Math.PI * 2); ctx.fill();
+      if (hot) {
+        spawnSparks(bullet.x - bullet.vx * 0.5, bullet.y - bullet.vy * 0.5, 2,
+          Math.random() < 0.5 ? "#ff6a20" : "#ffd65a",
+          { minSpeed: 0.2, maxSpeed: 1.2, life: 18, maxSize: 3 });
+      }
     } else if (bullet.type === "cone") {
       ctx.fillStyle = "#63ff91";
       ctx.beginPath(); ctx.moveTo(0, -7); ctx.lineTo(4, 0); ctx.lineTo(0, 7); ctx.lineTo(-4, 0); ctx.closePath(); ctx.fill();
@@ -503,104 +975,50 @@ function drawGame(t) {
     ctx.restore();
   }
   compact(bullets, (b) => b.x > -20 && b.x < W + 20 && b.y > -20 && b.y < H + 20);
+  updateSparks();
 
   enemyShotTimer--;
   if (enemyShotTimer <= 0) {
-    // Pick a random living enemy by counting first, so no array is allocated.
+    // Only grunts use the shared homing shot; turrets and chargers fire on
+    // their own timers. Counting first avoids allocating a list of candidates.
     let livingCount = 0;
-    for (const enemy of enemies) if (enemy.alive) livingCount++;
+    for (const enemy of enemies) if (enemy.alive && enemy.type === "grunt") livingCount++;
     if (livingCount) {
       let pick = Math.floor(Math.random() * livingCount);
       let shooter = null;
       for (const enemy of enemies) {
-        if (enemy.alive && pick-- === 0) { shooter = enemy; break; }
+        if (enemy.alive && enemy.type === "grunt" && pick-- === 0) { shooter = enemy; break; }
       }
-      const angle = Math.atan2(player.y - shooter.y, player.x - shooter.x);
-      enemyBullets.push({
-        x: shooter.x,
-        y: shooter.y + 18,
-        vx: Math.cos(angle) * 2.8,
-        vy: Math.sin(angle) * 2.8,
-        speed: 2.8,
-        turnRate: 0.035,
-      });
+      fireHomingShot(shooter.x, shooter.y + 18, 2.8);
     }
-    enemyShotTimer = 45 + Math.floor(Math.random() * 45);
+    // later waves shoot a little more often, but never faster than ~0.5s
+    const pressure = Math.min(18, wave * 3);
+    enemyShotTimer = Math.max(30, 45 - pressure) + Math.floor(Math.random() * 45);
   }
-  ctx.fillStyle = "#ff6b8a";
-  for (const bullet of enemyBullets) {
-    let nextAngle = Math.atan2(bullet.vy, bullet.vx);
-    if (bullet.y < H) {
-      const targetAngle = Math.atan2(player.y - bullet.y, player.x - bullet.x);
-      const currentAngle = Math.atan2(bullet.vy, bullet.vx);
-      let angleDiff = targetAngle - currentAngle;
-      angleDiff = Math.atan2(Math.sin(angleDiff), Math.cos(angleDiff));
-      nextAngle = currentAngle + Math.max(-bullet.turnRate, Math.min(bullet.turnRate, angleDiff));
-      bullet.vx = Math.cos(nextAngle) * bullet.speed;
-      bullet.vy = Math.sin(nextAngle) * bullet.speed;
-    }
-    bullet.x += bullet.vx;
-    bullet.y += bullet.vy;
-    ctx.save();
-    ctx.translate(bullet.x, bullet.y);
-    ctx.rotate(nextAngle + Math.PI / 2);
-    ctx.fillRect(-2, -6, 4, 12);
-    ctx.restore();
-    const hitWidth = player.shrunk ? 13 : 22;
-    const hitHeight = player.shrunk ? 14 : 24;
-    if (!adminInvincible && playerInvulnerable === 0 && Math.abs(bullet.x - player.x) < hitWidth && Math.abs(bullet.y - player.y) < hitHeight) {
-      lives--;
-      flashDamage();
-      playerInvulnerable = 90;
-      setText(dom.lives, String(lives));
-      bullet.y = H + 100;
-      if (lives <= 0) { endGame(); return; }
-    }
-  }
-  compact(enemyBullets, (bullet) => bullet.y < H + 20);
+  updateEnemyBullets();
+  if (!gameActive) return;
 
   const time = t * 0.001;
   for (const enemy of enemies) {
     if (!enemy.alive) continue;
-    const ey = enemy.y + Math.sin(time * 2 + enemy.phase) * 5;
-    ctx.fillStyle = "#c77dff";
-    ctx.beginPath();
-    ctx.moveTo(enemy.x, ey - enemy.h);
-    ctx.lineTo(enemy.x - enemy.w, ey + 7);
-    ctx.lineTo(enemy.x - 7, ey + 3);
-    ctx.lineTo(enemy.x, ey + enemy.h);
-    ctx.lineTo(enemy.x + 7, ey + 3);
-    ctx.lineTo(enemy.x + enemy.w, ey + 7);
-    ctx.closePath();
-    ctx.fill();
+    if (enemy.hitFlash > 0) enemy.hitFlash--;
+    const ey = updateEnemy(enemy, time);
+    drawEnemy(enemy, ey, time);
 
     const playerHitbox = player.shrunk ? 8 : 16;
     if (!adminInvincible && playerInvulnerable === 0 && Math.abs(player.x - enemy.x) < enemy.w + playerHitbox && Math.abs(player.y - ey) < enemy.h + playerHitbox) {
-      lives--;
-      flashDamage();
-      playerInvulnerable = 90;
-      setText(dom.lives, String(lives));
-      if (lives <= 0) {
-        endGame();
-        return;
-      }
+      hurtPlayer();
+      if (!gameActive) return;
     }
 
     for (const bullet of bullets) {
-      if (Math.abs(bullet.x - enemy.x) < enemy.w && Math.abs(bullet.y - ey) < 20) {
-        enemy.health -= bullet.damage || 1;
+      if (Math.abs(bullet.x - enemy.x) < enemy.w + 4 && Math.abs(bullet.y - ey) < enemy.h + 6) {
+        damageEnemy(enemy, bullet.damage || 1);
         if (!bullet.piercing) bullet.y = -100;
-        superDamage += bullet.damage || 1;
-        if (enemy.health <= 0) {
-          enemy.alive = false;
-          score += 100;
-          kills++;
-          playSound(520, 0.08, "square");
-        }
-        setText(dom.score, String(score).padStart(6, "0"));
         break;
       }
     }
+    if (superBeam) damageAlongBeam(enemy, ey);
   }
   let anyAlive = false;
   for (const enemy of enemies) if (enemy.alive) { anyAlive = true; break; }
@@ -612,10 +1030,195 @@ function drawGame(t) {
     player.y = H - 80;
     player.vx = 0;
     player.vy = 0;
-    showWaveCleared(wave);
+    showWaveBanner(`WAVE ${wave} CLEARED`, "");
     wave++;
     createEnemies();
+    announceWave(wave, 1250);
   }
+}
+
+function damageEnemy(enemy, amount) {
+  enemy.health -= amount;
+  enemy.hitFlash = 6;
+  superDamage += amount;
+  if (enemy.health > 0) {
+    playSound(300, 0.05, "square");
+    return;
+  }
+  enemy.alive = false;
+  score += ENEMY_TYPES[enemy.type].score;
+  kills++;
+  playSound(520, 0.08, "square");
+  spawnSparks(enemy.x, enemy.y, 10, ENEMY_TYPES[enemy.type].color);
+  setText(dom.score, String(score).padStart(6, "0"));
+}
+
+let waveAnnounceTimer = null;
+function announceWave(number, delay) {
+  clearTimeout(waveAnnounceTimer);
+  waveAnnounceTimer = setTimeout(() => {
+    if (!gameActive || bossMode || bossIntro) return;
+    showWaveBanner(`WAVE ${number}`, WAVE_INTROS[number] || "");
+  }, delay);
+}
+
+// Returns the y to draw and collide against: grunts and turrets bob around a
+// fixed home, chargers actually move, so for them it is just enemy.y.
+function updateEnemy(enemy, time) {
+  if (enemy.type === "grunt") return enemy.y + Math.sin(time * 2 + enemy.phase) * 5;
+
+  if (enemy.type === "turret") {
+    enemy.spin += 0.01;
+    // barrel tracks the player, and the spread is fired along it
+    const aim = Math.atan2(player.y - enemy.y, player.x - enemy.x);
+    enemy.aimX = Math.cos(aim);
+    enemy.aimY = Math.sin(aim);
+    enemy.timer--;
+    if (enemy.timer === 26) enemy.state = "wind";
+    if (enemy.timer <= 0) {
+      enemy.state = "idle";
+      for (const offset of [-0.34, 0, 0.34]) {
+        fireStraightShot(enemy.x, enemy.y + 14, aim + offset, 3.4);
+      }
+      playSound(180, 0.1, "square");
+      enemy.timer = 140 + Math.floor(Math.random() * 90);
+    }
+    return enemy.y + Math.sin(time * 1.2 + enemy.phase) * 2;
+  }
+
+  // --- charger ------------------------------------------------------------
+  enemy.timer--;
+  if (enemy.state === "idle") {
+    enemy.x += (enemy.homeX - enemy.x) * 0.03;
+    enemy.y += (enemy.homeY - enemy.y) * 0.03 + Math.sin(time * 2.4 + enemy.phase) * 0.3;
+    if (enemy.timer <= 0) {
+      enemy.state = "wind";
+      enemy.timer = 46;
+      playSound(90, 0.18, "sawtooth");
+    }
+  } else if (enemy.state === "wind") {
+    const aim = Math.atan2(player.y - enemy.y, player.x - enemy.x);
+    enemy.aimX = Math.cos(aim);
+    enemy.aimY = Math.sin(aim);
+    enemy.x -= enemy.aimX * 0.7;   // rears back before the lunge
+    enemy.y -= enemy.aimY * 0.7;
+    if (enemy.timer === 30 || enemy.timer === 12) fireStraightShot(enemy.x, enemy.y, aim, 4);
+    if (enemy.timer <= 0) {
+      enemy.state = "dash";
+      enemy.timer = 68;
+      enemy.vx = enemy.aimX * 7.6;
+      enemy.vy = enemy.aimY * 7.6;
+      playSound(240, 0.14, "sawtooth");
+    }
+  } else if (enemy.state === "dash") {
+    enemy.x += enemy.vx;
+    enemy.y += enemy.vy;
+    enemy.vx *= 0.985;
+    enemy.vy *= 0.985;
+    if (enemy.x < 20 || enemy.x > W - 20) enemy.vx *= -1;
+    if (enemy.y < 40 || enemy.y > H - 30) enemy.vy *= -1;
+    enemy.x = Math.max(20, Math.min(W - 20, enemy.x));
+    enemy.y = Math.max(40, Math.min(H - 30, enemy.y));
+    if (Math.random() < 0.5) spawnSparks(enemy.x - enemy.vx * 2, enemy.y - enemy.vy * 2, 1, "#ff9f5a");
+    if (enemy.timer <= 0) { enemy.state = "return"; enemy.timer = 150; }
+  } else {
+    enemy.x += (enemy.homeX - enemy.x) * 0.045;
+    enemy.y += (enemy.homeY - enemy.y) * 0.045;
+    if (enemy.timer <= 0 || Math.hypot(enemy.homeX - enemy.x, enemy.homeY - enemy.y) < 12) {
+      enemy.state = "idle";
+      enemy.timer = Math.round(rand(110, 220));
+    }
+  }
+  return enemy.y;
+}
+
+function drawEnemy(enemy, ey, time) {
+  const flash = enemy.hitFlash > 0;
+  if (enemy.type === "grunt") {
+    ctx.fillStyle = flash ? "#ffffff" : "#c77dff";
+    ctx.beginPath();
+    ctx.moveTo(enemy.x, ey - enemy.h);
+    ctx.lineTo(enemy.x - enemy.w, ey + 7);
+    ctx.lineTo(enemy.x - 7, ey + 3);
+    ctx.lineTo(enemy.x, ey + enemy.h);
+    ctx.lineTo(enemy.x + 7, ey + 3);
+    ctx.lineTo(enemy.x + enemy.w, ey + 7);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = flash ? "#c77dff" : "#2a0f3d";
+    ctx.fillRect(enemy.x - 6, ey - 4, 12, 5);
+    return;
+  }
+
+  if (enemy.type === "turret") {
+    const winding = enemy.state === "wind";
+    ctx.save();
+    ctx.translate(enemy.x, ey);
+    // barrel
+    ctx.rotate(Math.atan2(enemy.aimY, enemy.aimX) - Math.PI / 2);
+    ctx.fillStyle = winding ? "#fff2c9" : "#3f7f76";
+    ctx.fillRect(-5, 4, 10, 22);
+    ctx.restore();
+    ctx.save();
+    ctx.translate(enemy.x, ey);
+    if (winding) drawGlow("#ffdc5a", 20, 0, 0);
+    // armoured hex shell
+    ctx.fillStyle = flash ? "#ffffff" : winding ? "#8fffe9" : "#5ad1c0";
+    ctx.beginPath();
+    for (let i = 0; i < 6; i++) {
+      const a = enemy.spin + (i / 6) * Math.PI * 2;
+      const px = Math.cos(a) * enemy.w;
+      const py = Math.sin(a) * enemy.h;
+      if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = "#0d2b2a";
+    ctx.beginPath(); ctx.arc(0, 0, 8, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = winding ? "#ffdc5a" : "#b6fff3";
+    ctx.beginPath(); ctx.arc(0, 0, 4.5, 0, Math.PI * 2); ctx.fill();
+    // damage pips
+    ctx.fillStyle = "#0d2b2a";
+    for (let i = 0; i < enemy.maxHealth - enemy.health; i++) ctx.fillRect(-9 + i * 7, -enemy.h - 6, 5, 3);
+    ctx.restore();
+    return;
+  }
+
+  // charger: an arrowhead that always points where it is about to go
+  const winding = enemy.state === "wind";
+  const dashing = enemy.state === "dash";
+  const angle = dashing
+    ? Math.atan2(enemy.vy, enemy.vx)
+    : Math.atan2(enemy.aimY || 1, enemy.aimX || 0);
+  ctx.save();
+  ctx.translate(enemy.x, ey);
+  ctx.rotate(angle + Math.PI / 2);
+  if (dashing) {
+    ctx.fillStyle = "rgba(255, 150, 60, 0.55)";
+    ctx.beginPath();
+    ctx.moveTo(-7, 6); ctx.lineTo(0, 26 + Math.sin(time * 40) * 6); ctx.lineTo(7, 6);
+    ctx.closePath(); ctx.fill();
+  }
+  if (winding) {
+    const pulse = 0.5 + 0.5 * Math.sin(time * 30);
+    drawGlow("#ff4747", 22, 0, 0);
+    ctx.globalAlpha = 0.35 + pulse * 0.4;
+    ctx.strokeStyle = "#ff4747";
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(0, 0, 22 + pulse * 5, 0, Math.PI * 2); ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+  ctx.fillStyle = flash ? "#ffffff" : winding ? "#ffd0a0" : "#ff7a4f";
+  ctx.beginPath();
+  ctx.moveTo(0, -enemy.h - 4);
+  ctx.lineTo(enemy.w, enemy.h);
+  ctx.lineTo(0, enemy.h * 0.45);
+  ctx.lineTo(-enemy.w, enemy.h);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = enemy.health < enemy.maxHealth ? "#ffdc5a" : "#4a1200";
+  ctx.beginPath(); ctx.arc(0, -2, 4.5, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
 }
 
 function enterBossArea() {
@@ -651,15 +1254,62 @@ function resetBossAnimation() {
   bossDying = false;
   bossDeathTimer = 0;
   bossSpin = 0;
+  bossShards = [];
+  bossDamageStage = 0;
+  bossBlink = 0;
+  bossBlinkTimer = 200;
+  bossDrift = 0;
+  bossBurstTimer = 420;
+}
+
+// Rock knocked loose by damage, kept in orbit around the planet. Each shard has
+// its own inclination, so the swarm reads as debris rather than a tidy ring.
+function spawnBossShards(count) {
+  for (let i = 0; i < count; i++) {
+    bossShards.push({
+      angle: rand(0, Math.PI * 2),
+      speed: rand(0.004, 0.011) * (Math.random() < 0.5 ? -1 : 1),
+      dist: BOSS_RADIUS * rand(1.12, 1.5),
+      flatten: rand(0.2, 0.85),
+      size: rand(4, 11),
+      spin: rand(0, Math.PI * 2),
+      spinSpeed: rand(-0.05, 0.05),
+      shade: Math.random() < 0.5 ? "#8d8880" : "#6a6660",
+    });
+  }
+}
+
+function drawBossShards(front) {
+  for (const shard of bossShards) {
+    const depth = Math.sin(shard.angle);
+    if ((depth >= 0) !== front) continue;
+    const x = Math.cos(shard.angle) * shard.dist;
+    const y = Math.sin(shard.angle) * shard.dist * shard.flatten;
+    const scale = 0.7 + (depth + 1) * 0.25;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(shard.spin);
+    ctx.scale(scale, scale);
+    ctx.fillStyle = shard.shade;
+    ctx.beginPath();
+    ctx.moveTo(-shard.size, -shard.size * 0.5);
+    ctx.lineTo(0, -shard.size);
+    ctx.lineTo(shard.size, -shard.size * 0.3);
+    ctx.lineTo(shard.size * 0.6, shard.size * 0.8);
+    ctx.lineTo(-shard.size * 0.7, shard.size * 0.6);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = "rgba(255, 246, 220, 0.22)";
+    ctx.fillRect(-shard.size * 0.6, -shard.size * 0.5, shard.size * 0.7, shard.size * 0.3);
+    ctx.restore();
+  }
 }
 
 function startBossFight() {
   bossIntro = false; bossMode = true;
   document.getElementById("boss-intro").classList.remove("visible");
-  if (audioContext && !bossMusicTimer) {
-    const notes = [110, 138, 123, 92]; let index = 0;
-    bossMusicTimer = setInterval(() => playSound(notes[index++ % notes.length], 0.28, "sawtooth"), 360);
-  }
+  music.play("boss");
+  showWaveBanner("MERCURY", "DESTROY THE PLANET");
 }
 
 const BOSS_MAX_HEALTH = 75;
@@ -688,15 +1338,16 @@ const BOSS_CRATERS = [
 ];
 // Crack seeds in unit space; revealed progressively as Mercury loses health.
 const BOSS_CRACKS = [
-  [[-0.62, -0.28], [-0.3, -0.14], [-0.16, -0.34], [0.08, -0.2]],
-  [[0.2, 0.66], [0.1, 0.34], [0.34, 0.16], [0.28, -0.12]],
-  [[-0.72, 0.3], [-0.38, 0.34], [-0.22, 0.58], [0.02, 0.62]],
-  [[0.74, 0.1], [0.44, 0.04], [0.3, -0.26], [0.5, -0.5]],
-  [[-0.1, -0.78], [-0.04, -0.42], [-0.3, -0.2], [-0.2, 0.1]],
+  [[-0.97, -0.05], [-0.78, -0.26], [-0.66, -0.55], [-0.42, -0.72]],
+  [[-0.9, 0.28], [-0.66, 0.46], [-0.38, 0.68], [-0.06, 0.84]],
+  [[0.95, -0.14], [0.76, -0.34], [0.64, -0.6], [0.4, -0.78]],
+  [[0.9, 0.26], [0.66, 0.47], [0.42, 0.7], [0.12, 0.86]],
+  [[-0.3, 0.9], [-0.02, 0.74], [0.26, 0.88], [0.5, 0.7]],
 ];
 
 function spawnBossParticles(count, options) {
-  for (let i = 0; i < count; i++) {
+  const budget = Math.max(1, Math.round(count * quality.particles));
+  for (let i = 0; i < budget; i++) {
     const angle = options.angle === undefined
       ? rand(0, Math.PI * 2)
       : options.angle + rand(-options.spread, options.spread);
@@ -758,6 +1409,13 @@ function updateBossExplosions() {
 function damageBoss(amount, fromX, fromY) {
   if (bossDying) return;
   boss.health -= amount;
+  // each quarter of health knocks a few chunks off the planet, for good
+  const stage = Math.floor((1 - Math.max(0, boss.health) / BOSS_MAX_HEALTH) * 4);
+  if (stage > bossDamageStage) {
+    bossDamageStage = stage;
+    spawnBossShards(3);
+    bossShakeTimer = Math.max(bossShakeTimer, 12);
+  }
   bossHitFlash = BOSS_HIT_FRAMES;
   bossShakeTimer = Math.max(bossShakeTimer, 6);
   const angle = Math.atan2(boss.y - fromY, boss.x - fromX) + Math.PI;
@@ -787,7 +1445,7 @@ function startBossDeath() {
   bossBullets = [];
   enemyBullets = [];
   superBombs = [];
-  if (bossMusicTimer) { clearInterval(bossMusicTimer); bossMusicTimer = null; }
+  music.stop();
   setWidth(dom.bossFill, 0);
   playSound(70, 0.9, "sawtooth");
 }
@@ -835,8 +1493,7 @@ function finishBossDeath() {
   bossBullets = [];
   enemyBullets = [];
   lives++;
-  const livesEl = dom.lives;
-  if (livesEl) setText(livesEl, String(lives));
+  setLives(lives, true);
   if (!bossDefeated) {
     bossDefeated = true;
     showVictory();
@@ -900,16 +1557,17 @@ function drawMercury(t) {
   ctx.fillStyle = auraGradient;
   ctx.beginPath(); ctx.arc(0, 0, auraRadius, 0, Math.PI * 2); ctx.fill();
 
+  // leans toward the player, harder while winding up a shot
+  const lean = Math.max(-1, Math.min(1, (player.x - boss.x) / (W * 0.4)));
+  ctx.rotate(lean * (0.05 + charge * 0.09));
   ctx.scale(scale * squashX, scale * squashY);
 
-  // --- orbital ring, back half -------------------------------------------
-  const ringTilt = 0.34;
-  ctx.save();
-  ctx.rotate(-0.18);
-  ctx.strokeStyle = "rgba(160, 140, 200, 0.45)";
-  ctx.lineWidth = 3;
-  ctx.beginPath(); ctx.ellipse(0, 6, R * 1.42, R * ringTilt, 0, Math.PI, Math.PI * 2); ctx.stroke();
-  ctx.restore();
+  // --- debris that has been knocked off, behind the planet ----------------
+  for (const shard of bossShards) {
+    shard.angle += shard.speed;
+    shard.spin += shard.spinSpeed;
+  }
+  drawBossShards(false);
 
   // --- body ---------------------------------------------------------------
   // The body and terminator gradients are in the planet's own coordinate space,
@@ -952,23 +1610,41 @@ function drawMercury(t) {
 
   // --- battle damage: cracks open up as the health bar drains -------------
   if (crackCount > 0) {
-    const glow = bossDying ? 1 : 0.5 + Math.sin(t * 0.01) * 0.2;
-    const crackColor = `rgba(255, ${bossDying ? 200 : 140}, 60, ${glow.toFixed(3)})`;
-    const crackWidth = bossDying ? 6 : 3.5;
-    for (let i = 0; i < Math.min(crackCount, BOSS_CRACKS.length); i++) {
-      const path = BOSS_CRACKS[i];
-      ctx.beginPath();
-      for (let n = 0; n < path.length; n++) {
-        const x = path[n][0] * R;
-        const y = path[n][1] * R;
-        if (n === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    // Molten seams: a dark fissure with a hot core and a bloom either side, all
+    // pulsing together, so the planet looks lit from inside rather than drawn on.
+    const pulse = bossDying ? 1 : 0.55 + Math.sin(t * 0.006) * 0.25;
+    const shown = Math.min(crackCount, BOSS_CRACKS.length);
+    for (let pass = 0; pass < 3; pass++) {
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      if (pass === 0) {
+        ctx.strokeStyle = `rgba(255, 90, 20, ${(0.2 * pulse).toFixed(3)})`;
+        ctx.lineWidth = (bossDying ? 18 : 10) * pulse;
+      } else if (pass === 1) {
+        ctx.strokeStyle = `rgba(255, ${bossDying ? 210 : 160}, 70, ${(0.85 * pulse).toFixed(3)})`;
+        ctx.lineWidth = bossDying ? 7 : 4;
+      } else {
+        ctx.strokeStyle = "rgba(255, 250, 225, 0.9)";
+        ctx.lineWidth = bossDying ? 2.6 : 1.5;
       }
-      ctx.strokeStyle = crackColor;
-      ctx.lineWidth = crackWidth;
-      ctx.stroke();
-      ctx.strokeStyle = "rgba(20, 14, 12, 0.75)";
-      ctx.lineWidth = 1.4;
-      ctx.stroke();
+      for (let i = 0; i < shown; i++) {
+        const path = BOSS_CRACKS[i];
+        ctx.beginPath();
+        for (let n = 0; n < path.length; n++) {
+          const x = path[n][0] * R;
+          const y = path[n][1] * R;
+          if (n === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+        // branches, so the fissures fork instead of running as single lines
+        if (pass === 1 && path.length > 2) {
+          const mid = path[1];
+          ctx.beginPath();
+          ctx.moveTo(mid[0] * R, mid[1] * R);
+          ctx.lineTo(mid[0] * R + (i % 2 ? 26 : -26), mid[1] * R + 20);
+          ctx.stroke();
+        }
+      }
     }
   }
   ctx.restore();
@@ -981,53 +1657,78 @@ function drawMercury(t) {
   // --- face ---------------------------------------------------------------
   const angry = 0.4 + charge * 0.6;
   const eyeGlow = charge > 0.05 ? "#ff5a3c" : hit > 0 ? "#fff3b0" : "#ff4f91";
-  const eyeRadius = (5.5 + charge * 3.5 + shoot * 2) * (hit > 0 ? 0.7 : 1);
+  const eyeRadius = (9 + charge * 4 + shoot * 2.5) * (hit > 0 ? 0.7 : 1);
 
   ctx.fillStyle = "#171717";
   BROW_SIDES.forEach((side) => {
     ctx.save();
-    ctx.translate(side * 19, -13);
+    ctx.translate(side * 27, -20);
     ctx.rotate(side * angry * 0.55);
     ctx.beginPath();
-    ctx.moveTo(-16, -6); ctx.lineTo(14, -13); ctx.lineTo(15, -5); ctx.lineTo(-15, 2);
+    ctx.moveTo(-23, -9); ctx.lineTo(20, -19); ctx.lineTo(22, -7); ctx.lineTo(-22, 4);
     ctx.closePath(); ctx.fill();
     ctx.restore();
   });
 
-  if (hit > 0.05) {
-    // squinting in pain
-    ctx.strokeStyle = eyeGlow;
-    ctx.lineWidth = 4;
+  // blink on its own clock — the cheapest trick there is for making a face
+  // look like something is behind it
+  if (!bossDying) {
+    if (bossBlink > 0) bossBlink--;
+    else if (--bossBlinkTimer <= 0) {
+      bossBlink = 8;
+      bossBlinkTimer = 170 + Math.floor(Math.random() * 240);
+    }
+  }
+  const shut = hit > 0.05 || bossBlink > 0;
+
+  if (shut) {
+    ctx.strokeStyle = hit > 0.05 ? eyeGlow : "#171717";
+    ctx.lineWidth = 6;
     ctx.lineCap = "round";
     BROW_SIDES.forEach((side) => {
       ctx.beginPath();
-      ctx.moveTo(side * 19 - 6, -10);
-      ctx.lineTo(side * 19 + 6, -10);
+      ctx.moveTo(side * 27 - 10, -12);
+      ctx.lineTo(side * 27 + 10, -12);
       ctx.stroke();
     });
   } else {
-    ctx.shadowColor = eyeGlow;
-    ctx.shadowBlur = 12 + charge * 16;
+    // pupils track the ship
+    const toPlayer = Math.atan2(player.y - boss.y, player.x - boss.x);
+    const look = Math.min(1, Math.hypot(player.x - boss.x, player.y - boss.y) / 260);
+    const lookX = Math.cos(toPlayer) * eyeRadius * 0.36 * look;
+    const lookY = Math.sin(toPlayer) * eyeRadius * 0.36 * look;
+    const eyeGlowRadius = Math.round(16 + charge * 18);
+    drawGlow(eyeGlow, eyeGlowRadius, -27, -14);
+    drawGlow(eyeGlow, eyeGlowRadius, 27, -14);
+    ctx.fillStyle = "#f6f1ea";
+    ctx.beginPath();
+    ctx.arc(-27, -14, eyeRadius, 0, Math.PI * 2);
+    ctx.arc(27, -14, eyeRadius, 0, Math.PI * 2);
+    ctx.fill();
     ctx.fillStyle = eyeGlow;
     ctx.beginPath();
-    ctx.arc(-19, -11, eyeRadius, 0, Math.PI * 2);
-    ctx.arc(19, -11, eyeRadius, 0, Math.PI * 2);
+    ctx.arc(-27 + lookX, -14 + lookY, eyeRadius * 0.6, 0, Math.PI * 2);
+    ctx.arc(27 + lookX, -14 + lookY, eyeRadius * 0.6, 0, Math.PI * 2);
     ctx.fill();
-    ctx.shadowBlur = 0;
-    ctx.fillStyle = "rgba(255,255,255,0.85)";
+    ctx.fillStyle = "#170606";
     ctx.beginPath();
-    ctx.arc(-21, -13, eyeRadius * 0.32, 0, Math.PI * 2);
-    ctx.arc(17, -13, eyeRadius * 0.32, 0, Math.PI * 2);
+    ctx.arc(-27 + lookX, -14 + lookY, eyeRadius * 0.27, 0, Math.PI * 2);
+    ctx.arc(27 + lookX, -14 + lookY, eyeRadius * 0.27, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "rgba(255,255,255,0.9)";
+    ctx.beginPath();
+    ctx.arc(-31 + lookX, -18 + lookY, eyeRadius * 0.22, 0, Math.PI * 2);
+    ctx.arc(23 + lookX, -18 + lookY, eyeRadius * 0.22, 0, Math.PI * 2);
     ctx.fill();
   }
 
   // mouth: frown at rest, puckers on the wind-up, gapes on the shot
-  const mouthOpen = shoot * 20 + charge * 8;
+  const mouthOpen = shoot * 22 + charge * 9;
   if (mouthOpen > 1.5) {
     // Two fixed variants (winding up vs. firing), built on first use.
     const winding = charge > 0.05 && shoot === 0;
     if (!mouthGradients[winding ? 1 : 0]) {
-      const gradient = ctx.createRadialGradient(0, 22, 2, 0, 22, 26);
+      const gradient = ctx.createRadialGradient(0, 32, 2, 0, 32, 34);
       gradient.addColorStop(0, winding ? "#ffd07a" : "#ffe9a8");
       gradient.addColorStop(0.5, "#ff6a2c");
       gradient.addColorStop(1, "#160606");
@@ -1035,14 +1736,24 @@ function drawMercury(t) {
     }
     ctx.fillStyle = mouthGradients[winding ? 1 : 0];
     ctx.beginPath();
-    ctx.ellipse(0, 22, 14 + mouthOpen * 0.5, mouthOpen, 0, 0, Math.PI * 2);
+    ctx.ellipse(0, 32, 18 + mouthOpen * 0.6, mouthOpen * 1.05, 0, 0, Math.PI * 2);
     ctx.fill();
+    // teeth, so an open mouth reads as a mouth and not a fireball
+    ctx.fillStyle = "#f4ead8";
+    const bite = Math.min(7, mouthOpen * 0.4);
+    for (let i = -2; i <= 2; i++) {
+      ctx.beginPath();
+      ctx.moveTo(i * 9 - 4, 32 - mouthOpen * 1.05);
+      ctx.lineTo(i * 9 + 4, 32 - mouthOpen * 1.05);
+      ctx.lineTo(i * 9, 32 - mouthOpen * 1.05 + bite);
+      ctx.closePath(); ctx.fill();
+    }
   } else {
     ctx.strokeStyle = "#171717";
-    ctx.lineWidth = 5;
+    ctx.lineWidth = 6;
     ctx.lineCap = "round";
     ctx.beginPath();
-    ctx.arc(0, 34, 22, Math.PI + 0.3, Math.PI * 2 - 0.3);
+    ctx.arc(0, 44, 28, Math.PI + 0.32, Math.PI * 2 - 0.32);
     ctx.stroke();
   }
 
@@ -1054,18 +1765,8 @@ function drawMercury(t) {
     ctx.globalCompositeOperation = "source-over";
   }
 
-  // --- orbital ring, front half ------------------------------------------
-  ctx.save();
-  ctx.rotate(-0.18);
-  ctx.strokeStyle = "rgba(215, 195, 255, 0.75)";
-  ctx.lineWidth = 4;
-  ctx.beginPath(); ctx.ellipse(0, 6, R * 1.42, R * ringTilt, 0, 0, Math.PI); ctx.stroke();
-  const moonAngle = t * 0.0012;
-  ctx.fillStyle = "#e6e0f5";
-  ctx.beginPath();
-  ctx.arc(Math.cos(moonAngle) * R * 1.42, 6 + Math.sin(moonAngle) * R * ringTilt, 6, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
+  // --- debris passing in front -------------------------------------------
+  drawBossShards(true);
 
   ctx.restore();
 
@@ -1075,14 +1776,60 @@ function drawMercury(t) {
 
 function drawBossArea(t) {
   ctx.fillStyle = "#16051f"; ctx.fillRect(0, 0, W, H);
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.drawImage(bossGridLayer, 0, 0);
+  ctx.restore();
 
   if (bossDying) updateBossDeath();
   drawMercury(t);
   updateBossExplosions();
   updateBossParticles();
+  updateSparks();
+
+  // LANCE burns the boss for as long as the beam is on it
+  if (superBeam && !bossDying && superBeam.life % BEAM_TICK === 0 && beamDistance(boss.x, boss.y) < BEAM_HALF_WIDTH + BOSS_RADIUS * 0.8) {
+    damageBoss(3, player.x, player.y);
+    superDamage += 3;
+    spawnSparks(boss.x, boss.y, 8, "#b9f0ff", { life: 20 });
+  }
 
   if (!bossDying) {
+    // Mercury sweeps the arena and leans toward the player. A stationary boss is
+    // what made "stand here and never get hit" possible in the first place.
+    bossDrift += 0.0062;
+    const range = Math.min(250, W * 0.22);
+    const target = W / 2 + Math.sin(bossDrift) * range + (player.x - W / 2) * 0.18;
+    boss.x += (target - boss.x) * 0.02;
+    boss.x = Math.max(120, Math.min(W - 120, boss.x));
+
+    // molten embers rise off the cracks once it is properly hurt
+    if (bossDamageStage >= 2 && Math.random() < 0.4) {
+      const a = rand(0, Math.PI * 2);
+      spawnSparks(boss.x + Math.cos(a) * BOSS_RADIUS * 0.7, boss.y + Math.sin(a) * BOSS_RADIUS * 0.7,
+        1, Math.random() < 0.5 ? "#ff6a20" : "#ffd65a",
+        { minSpeed: 0.2, maxSpeed: 0.9, life: 40, drag: 0.98, gravity: -0.02 });
+    }
+
+    // radial burst: rare, slow, easy to walk out of — but it sweeps the arena,
+    // so there is no corner that is safe forever
+    bossBurstTimer--;
+    if (bossBurstTimer === 40) {
+      bossChargeAnim = BOSS_CHARGE_FRAMES;
+      playSound(60, 0.4, "triangle");
+    }
+    if (bossBurstTimer <= 0) {
+      for (let i = 0; i < 10; i++) {
+        const a = (i / 10) * Math.PI * 2 + rand(-0.05, 0.05);
+        bossBullets.push({ x: boss.x, y: boss.y, vx: Math.cos(a) * 2.7, vy: Math.sin(a) * 2.7 });
+      }
+      bossShootAnim = BOSS_SHOOT_FRAMES;
+      bossShakeTimer = Math.max(bossShakeTimer, 10);
+      bossExplosions.push({ x: boss.x, y: boss.y, r: 0, max: 150, life: 20, maxLife: 20 });
+      playSound(140, 0.35, "sawtooth");
+      bossBurstTimer = 470;
+    }
+
     bossShotTimer--;
     if (bossShotTimer === 12) {
       bossChargeAnim = BOSS_CHARGE_FRAMES;
@@ -1091,7 +1838,7 @@ function drawBossArea(t) {
     if (bossChargeAnim > 0) bossChargeAnim--;
     if (bossShotTimer <= 0) {
       const angle = Math.atan2(player.y - boss.y, player.x - boss.x);
-      enemyBullets.push({ x: boss.x, y: boss.y + 70, vx: Math.cos(angle) * 4.2, vy: Math.sin(angle) * 4.2, speed: 4.2, turnRate: 0.018 });
+      enemyBullets.push({ x: boss.x, y: boss.y + 70, vx: Math.cos(angle) * 4.2, vy: Math.sin(angle) * 4.2, speed: 4.2, turnRate: 0.03, homing: 110, kind: "meteor" });
       bossShootAnim = BOSS_SHOOT_FRAMES;
       bossChargeAnim = 0;
       spawnBossParticles(10, {
@@ -1103,6 +1850,16 @@ function drawBossArea(t) {
   }
 
   for (const bullet of enemyBullets) {
+    if (bullet.homing > 0) {
+      bullet.homing--;
+      const targetAngle = Math.atan2(player.y - bullet.y, player.x - bullet.x);
+      const currentAngle = Math.atan2(bullet.vy, bullet.vx);
+      let angleDiff = targetAngle - currentAngle;
+      angleDiff = Math.atan2(Math.sin(angleDiff), Math.cos(angleDiff));
+      const next = currentAngle + Math.max(-bullet.turnRate, Math.min(bullet.turnRate, angleDiff));
+      bullet.vx = Math.cos(next) * bullet.speed;
+      bullet.vy = Math.sin(next) * bullet.speed;
+    }
     bullet.x += bullet.vx; bullet.y += bullet.vy;
     ctx.save();
     ctx.translate(bullet.x, bullet.y);
@@ -1116,18 +1873,18 @@ function drawBossArea(t) {
     ctx.beginPath(); ctx.arc(-2, -3, 2, 0, Math.PI * 2); ctx.fill();
     ctx.restore();
     if (!adminInvincible && playerInvulnerable === 0 && Math.abs(bullet.x - player.x) < 22 && Math.abs(bullet.y - player.y) < 24) {
-      lives--; playerInvulnerable = 90; flashDamage();
-      setText(dom.lives, String(lives));
-      bullet.y = H + 100;
-      if (lives <= 0) { endGame(); return; }
+      hurtPlayer();
+      bullet.y = H + 200;
+      if (!gameActive) return;
     }
   }
-  compact(enemyBullets, (bullet) => bullet.y < H + 20);
+  compact(enemyBullets, (b) => b.y < H + 30 && b.y > -60 && b.x > -60 && b.x < W + 60);
 
   for (const bomb of superBombs) {
     bomb.x += bomb.vx; bomb.y += bomb.vy; bomb.life--;
-    ctx.fillStyle = "#63f7ff"; ctx.shadowColor = "#63f7ff"; ctx.shadowBlur = 18;
-    ctx.beginPath(); ctx.arc(bomb.x, bomb.y, 9, 0, Math.PI * 2); ctx.fill(); ctx.shadowBlur = 0;
+    drawGlow("#63f7ff", 18, bomb.x, bomb.y);
+    ctx.fillStyle = "#63f7ff";
+    ctx.beginPath(); ctx.arc(bomb.x, bomb.y, 9, 0, Math.PI * 2); ctx.fill();
     if (Math.hypot(bomb.x - boss.x, bomb.y - boss.y) < 88 || bomb.life <= 0) {
       if (!bossDying) damageBoss(15, bomb.x, bomb.y);
       bossExplosions.push({ x: bomb.x, y: bomb.y, r: 0, max: 110, life: 18, maxLife: 18 });
@@ -1143,8 +1900,17 @@ function drawBossArea(t) {
     ctx.translate(bullet.x, bullet.y);
     ctx.rotate(Math.atan2(bullet.vy, bullet.vx) + Math.PI / 2);
     if (bullet.type === "charge") {
-      ctx.fillStyle = "#ff8a32"; ctx.shadowColor = "#ff8a32"; ctx.shadowBlur = 12;
-      ctx.beginPath(); ctx.arc(0, 0, bullet.size, 0, Math.PI * 2); ctx.fill(); ctx.shadowBlur = 0;
+      const hot = (bullet.damage || 1) >= 4;
+      drawGlow(hot ? "#ff4d1a" : "#ff8a32", hot ? 20 : 12, 0, 0);
+      ctx.fillStyle = hot ? "#ff5a1e" : "#ff8a32";
+      ctx.beginPath(); ctx.arc(0, 0, bullet.size, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "#fff3c4";
+      ctx.beginPath(); ctx.arc(0, 0, bullet.size * 0.45, 0, Math.PI * 2); ctx.fill();
+      if (hot) {
+        spawnSparks(bullet.x - bullet.vx * 0.5, bullet.y - bullet.vy * 0.5, 2,
+          Math.random() < 0.5 ? "#ff6a20" : "#ffd65a",
+          { minSpeed: 0.2, maxSpeed: 1.2, life: 18, maxSize: 3 });
+      }
     } else if (bullet.type === "cone") {
       ctx.fillStyle = "#63ff91";
       ctx.beginPath(); ctx.moveTo(0, -7); ctx.lineTo(4, 0); ctx.lineTo(0, 7); ctx.lineTo(-4, 0); ctx.closePath(); ctx.fill();
@@ -1195,25 +1961,27 @@ function drawBossArea(t) {
     const hitWidth = player.shrunk ? 13 : 22;
     const hitHeight = player.shrunk ? 14 : 24;
     if (!adminInvincible && playerInvulnerable === 0 && Math.abs(b.x - player.x) < hitWidth + 7 && Math.abs(b.y - player.y) < hitHeight + 7) {
-      lives--;
-      flashDamage();
-      playerInvulnerable = 90;
-      setText(dom.lives, String(lives));
-      b.y = H + 100;
-      if (lives <= 0) { endGame(); return; }
+      hurtPlayer();
+      b.y = H + 200;
+      if (!gameActive) return;
     }
   }
   compact(bossBullets, (b) => b.x > -30 && b.x < W + 30 && b.y > -30 && b.y < H + 30);
 
   if (boss.health <= 0 && !bossDying && !bossDefeated) startBossDeath();
+  updateSuperBeam(t);
+  drawChargeAura(t);
   drawPlayer();
 }
 
 function showVictory() {
   gamePaused = true;
   bossIntro = true;
+  music.play("victory");
   document.getElementById("boss-player-name").textContent = playerName;
   document.getElementById("victory-player-name").textContent = playerName;
+  setText(document.getElementById("victory-score"), String(score).padStart(6, "0"));
+  setText(document.getElementById("victory-waves"), "5");
   refreshLoadoutUI();
   document.getElementById("victory-screen").classList.add("visible");
   document.getElementById("victory-screen").setAttribute("aria-hidden", "false");
@@ -1223,8 +1991,9 @@ function drawTestRoom() {
   ctx.fillStyle = "#07131a"; ctx.fillRect(0, 0, W, H);
   for (const bomb of superBombs) {
     bomb.x += bomb.vx; bomb.y += bomb.vy; bomb.life--;
-    ctx.fillStyle = "#63f7ff"; ctx.shadowColor = "#63f7ff"; ctx.shadowBlur = 16;
-    ctx.beginPath(); ctx.arc(bomb.x, bomb.y, 10, 0, Math.PI * 2); ctx.fill(); ctx.shadowBlur = 0;
+    drawGlow("#63f7ff", 16, bomb.x, bomb.y);
+    ctx.fillStyle = "#63f7ff";
+    ctx.beginPath(); ctx.arc(bomb.x, bomb.y, 10, 0, Math.PI * 2); ctx.fill();
     if (Math.hypot(bomb.x - W / 2, bomb.y - 190) < 68 || bomb.life <= 0) { bomb.explode = true; testDamage += 15; }
   }
   compact(superBombs, (bomb) => !bomb.explode);
@@ -1240,6 +2009,13 @@ function drawTestRoom() {
   compact(bullets, (b) => b.y > -20 && b.y < H + 20 && b.x > -20 && b.x < W + 20);
   ctx.fillStyle = "#777"; ctx.beginPath(); ctx.arc(W / 2, 190, 58, 0, Math.PI * 2); ctx.fill();
   ctx.fillStyle = "#aaa"; ctx.beginPath(); ctx.arc(W / 2 - 18, 175, 9, 0, Math.PI * 2); ctx.arc(W / 2 + 20, 205, 7, 0, Math.PI * 2); ctx.fill();
+  if (superBeam && superBeam.life % BEAM_TICK === 0 && beamDistance(W / 2, 190) < BEAM_HALF_WIDTH + 58) {
+    testDamage += 2;
+    superDamage += 2;
+  }
+  updateSparks();
+  updateSuperBeam(0);
+  drawChargeAura(performance.now());
   setText(dom.testDamage, `DAMAGE: ${testDamage}`);
   updateChargeMeter();
   drawPlayer();
@@ -1253,40 +2029,33 @@ function drawPlayer() {
   if (invincibilitySuperTimer > 0) {
     const radius = player.shrunk ? 29 : 42;
     const pulse = Math.sin(performance.now() * 0.012) * 2;
+    drawGlow("#ffbe1e", 16, player.x, player.y);
     ctx.fillStyle = "rgba(255, 205, 45, .12)";
     ctx.strokeStyle = "rgba(255, 215, 70, .95)";
     ctx.lineWidth = 3;
-    ctx.shadowColor = "rgba(255, 190, 30, .85)";
-    ctx.shadowBlur = 16;
     ctx.beginPath(); ctx.arc(player.x, player.y, radius + pulse, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-    ctx.shadowBlur = 0;
   }
 }
 
 function endGame() {
   gameActive = false;
   playSound(90, 0.55, "sawtooth");
+  playSound(60, 1.1, "sawtooth");
   document.getElementById("test-damage").classList.remove("visible");
   bossIntro = false;
-  if (bossMusicTimer) { clearInterval(bossMusicTimer); bossMusicTimer = null; }
+  music.stop();
   bossMode = false;
+  superBeam = null;
   gameOverShown = true;
   enemyBullets = [];
-  document.getElementById("game-message").textContent = "GAME OVER";
+  setText(dom.gameMessage, "GAME OVER");
   document.getElementById("try-again-btn").classList.add("visible");
   document.getElementById("main-menu-btn").classList.add("visible");
 }
 
 function startGame() {
-  try {
-    if (!audioContext) {
-      const AudioCtor = window.AudioContext || window.webkitAudioContext;
-      if (AudioCtor) audioContext = new AudioCtor();
-    }
-    audioContext?.resume();
-  } catch (error) {
-    audioContext = null;
-  }
+  ensureAudio();
+  if (audioContext && audioContext.state === "suspended") audioContext.resume();
   gameActive = true;
   testDamage = 0;
   bossIntro = false;
@@ -1302,7 +2071,11 @@ function startGame() {
   bullets = [];
   enemyBullets = [];
   superBombs = [];
-  gamePaused = false;
+  setPaused(false);
+  sparks = [];
+  superBeam = null;
+  heartsDrawn = -1;
+  chargeStartedAt = 0;
   kills = 0;
   superDamage = 0;
   superMeter = 0;
@@ -1320,12 +2093,12 @@ function startGame() {
   player.vx = 0;
   player.vy = 0;
   createEnemies();
+  music.play("battle");
+  showWaveBanner("WAVE 1", "GOOD LUCK");
   document.getElementById("menu-wrap").classList.add("hidden");
   document.getElementById("game-ui").classList.add("active");
   document.getElementById("game-ui").setAttribute("aria-hidden", "false");
-  document.getElementById("game-message").textContent = "";
-  document.getElementById("wave-clear-message").textContent = "";
-  document.getElementById("wave-clear-message").classList.remove("flash");
+  setText(dom.gameMessage, "");
   document.getElementById("try-again-btn").classList.remove("visible");
   document.getElementById("main-menu-btn").classList.remove("visible");
   document.getElementById("boss-health").classList.remove("visible");
@@ -1335,8 +2108,95 @@ function startGame() {
   document.getElementById("victory-screen").setAttribute("aria-hidden", "true");
   playerName = "PLAYER";
   setText(dom.score, "000000");
-  setText(dom.lives, "3");
+  setLives(lives);
   updateSuperMeter();
+}
+
+// ---------------------------------------------------------------------------
+// Front-end skin
+//
+// The ship colour drives the whole menu: --theme / --theme-rgb are the only
+// accent tokens the stylesheet reads, so setting them here re-skins the title,
+// buttons, banners, HUD and pause card in one write.
+// ---------------------------------------------------------------------------
+function setTheme(hex) {
+  const value = parseInt(hex.slice(1), 16);
+  const rgb = `${(value >> 16) & 255}, ${(value >> 8) & 255}, ${value & 255}`;
+  const root = document.documentElement;
+  root.style.setProperty("--theme", hex);
+  root.style.setProperty("--theme-rgb", rgb);
+}
+
+const MAX_DRAWN_HEARTS = 8;
+let heartsDrawn = -1;
+
+// Health is hearts now. Rebuilding the row on every hit would restart the beat
+// animation on all of them, so it only rebuilds when the count actually moves.
+function setLives(count, gained) {
+  if (count === heartsDrawn) return;
+  const previous = heartsDrawn;
+  heartsDrawn = count;
+  const shown = Math.min(count, MAX_DRAWN_HEARTS);
+  let html = "";
+  for (let i = 0; i < shown; i++) {
+    const isNew = gained && i === shown - 1;
+    html += `<i class="heart${isNew ? " gained" : ""}"></i>`;
+  }
+  // keep the row's width honest while the player is losing hearts
+  for (let i = shown; i < Math.min(Math.max(previous, 3), MAX_DRAWN_HEARTS); i++) {
+    html += '<i class="heart lost"></i>';
+  }
+  if (count > MAX_DRAWN_HEARTS) html += `<span class="hearts-extra">x${count}</span>`;
+  dom.hearts.innerHTML = html;
+}
+
+let waveBannerTimer = null;
+
+function showWaveBanner(main, sub) {
+  const banner = dom.waveBanner;
+  setText(dom.waveBannerMain, main);
+  setText(dom.waveBannerSub, sub || "");
+  banner.classList.remove("show");
+  void banner.offsetWidth;
+  banner.classList.add("show");
+  clearTimeout(waveBannerTimer);
+  waveBannerTimer = setTimeout(() => banner.classList.remove("show"), 2200);
+}
+
+function setPaused(paused) {
+  gamePaused = paused;
+  dom.pauseScreen.classList.toggle("visible", paused);
+  dom.pauseScreen.setAttribute("aria-hidden", String(!paused));
+  setText(dom.gameMessage, "");
+  music.setDucked(paused);
+}
+
+// Shared by the pause card, the game-over screen and Escape-to-quit, so leaving
+// a run always tears down the same state.
+function returnToMenu() {
+  gameActive = false;
+  gamePaused = false;
+  bossMode = false;
+  bossIntro = false;
+  bossDying = false;
+  gameOverShown = false;
+  enemyBullets = [];
+  bossBullets = [];
+  bullets = [];
+  superBombs = [];
+  superBeam = null;
+  dom.pauseScreen.classList.remove("visible");
+  dom.pauseScreen.setAttribute("aria-hidden", "true");
+  document.getElementById("game-ui").classList.remove("active");
+  document.getElementById("game-ui").setAttribute("aria-hidden", "true");
+  document.getElementById("menu-wrap").classList.remove("hidden");
+  document.getElementById("boss-health").classList.remove("visible");
+  document.getElementById("boss-intro").classList.remove("visible");
+  document.getElementById("victory-screen").classList.remove("visible");
+  setText(dom.gameMessage, "");
+  document.getElementById("try-again-btn").classList.remove("visible");
+  document.getElementById("main-menu-btn").classList.remove("visible");
+  music.play("menu");
 }
 
 function flashDamage() {
@@ -1346,22 +2206,22 @@ function flashDamage() {
   flash.classList.add("active");
 }
 
-function showWaveCleared(number) {
-  const message = document.getElementById("wave-clear-message");
-  message.textContent = `WAVE ${number} CLEARED`;
-  message.classList.remove("flash");
-  void message.offsetWidth;
-  message.classList.add("flash");
-}
+const SUPER_COST = { bomb: 20, invincibility: 20, lance: 30 };
+let superReadyShown = false;
 
 function updateSuperMeter() {
-  const requiredDamage = selectedSuper === "void" ? 40 : 20;
+  const requiredDamage = SUPER_COST[selectedSuper] || 20;
   superMeter = Math.min(1, (superDamage - lastSuperKills) / requiredDamage);
   setWidth(dom.superFill, superMeter * 100);
+  const ready = superMeter >= 1;
+  if (ready !== superReadyShown) {
+    superReadyShown = ready;
+    dom.superMeter.classList.toggle("ready", ready);
+  }
 }
 
 const WEAPON_LABELS = { blaster: "BLASTER", charge: "CHARGE", cone: "CONE" };
-const SUPER_LABELS = { bomb: "BOMB", invincibility: "INVINCIBILITY", void: "VOID" };
+const SUPER_LABELS = { bomb: "BOMB", invincibility: "SHIELD", lance: "LANCE" };
 
 // Every place a loadout can be picked (weapons panel + victory screen) is
 // repainted from `selectedWeapon` / `selectedSuper`, so the highlight can never
@@ -1392,7 +2252,7 @@ function setSelectedWeapon(nextWeapon) {
 
 function setSelectedSuper(nextSuper) {
   if (nextSuper !== selectedSuper && superMeter >= 1) {
-    const requiredDamage = nextSuper === "void" ? 40 : 20;
+    const requiredDamage = SUPER_COST[nextSuper] || 20;
     lastSuperKills = superDamage - requiredDamage * 0.5;
   }
   selectedSuper = nextSuper;
@@ -1401,18 +2261,294 @@ function setSelectedSuper(nextSuper) {
   updateSuperMeter();
 }
 
+// ---------------------------------------------------------------------------
+// Audio
+//
+// One AudioContext, two buses: sfx and music. The music is a step sequencer —
+// a 25ms timer schedules notes a fraction of a second ahead of the clock, which
+// is the only way to get steady timing out of WebAudio (setInterval alone
+// jitters badly enough to hear). Every instrument is synthesised; there are no
+// samples to load.
+// ---------------------------------------------------------------------------
+let sfxGain = null;
+let musicGain = null;
+let noiseBuffer = null;
+
+function ensureAudio() {
+  if (audioContext) return audioContext;
+  try {
+    const AudioCtor = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtor) return null;
+    audioContext = new AudioCtor();
+    sfxGain = audioContext.createGain();
+    sfxGain.gain.value = 0.9;
+    sfxGain.connect(audioContext.destination);
+    musicGain = audioContext.createGain();
+    musicGain.gain.value = 0;
+    musicGain.connect(audioContext.destination);
+    // one second of white noise, reused by every drum hit
+    noiseBuffer = audioContext.createBuffer(1, audioContext.sampleRate, audioContext.sampleRate);
+    const data = noiseBuffer.getChannelData(0);
+    for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+  } catch (error) {
+    audioContext = null;
+  }
+  return audioContext;
+}
+
 function playSound(frequency, duration, type) {
-  if (!audioContext) return;
+  if (!audioContext || !sfxGain) return;
   const oscillator = audioContext.createOscillator();
   const gain = audioContext.createGain();
   oscillator.type = type;
   oscillator.frequency.value = frequency;
   gain.gain.setValueAtTime(0.045, audioContext.currentTime);
   gain.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + duration);
-  oscillator.connect(gain).connect(audioContext.destination);
+  oscillator.connect(gain).connect(sfxGain);
   oscillator.start();
   oscillator.stop(audioContext.currentTime + duration);
 }
+
+const music = (function () {
+  const LOOKAHEAD_MS = 25;
+  const SCHEDULE_AHEAD = 0.14;
+  const midiToFreq = (midi) => 440 * Math.pow(2, (midi - 69) / 12);
+
+  // Patterns are 16 steps to the bar, in MIDI note numbers; 0 is a rest and a
+  // bar list cycles, so a four-bar loop costs four short arrays.
+  const TRACKS = {
+    menu: {
+      bpm: 92,
+      volume: 0.16,
+      swing: 0.02,
+      bass: [[33, 0, 0, 0, 40, 0, 33, 0, 0, 0, 33, 0, 40, 0, 0, 0],
+             [31, 0, 0, 0, 38, 0, 31, 0, 0, 0, 31, 0, 38, 0, 0, 0],
+             [29, 0, 0, 0, 36, 0, 29, 0, 0, 0, 29, 0, 36, 0, 0, 0],
+             [28, 0, 0, 0, 35, 0, 28, 0, 0, 0, 35, 0, 35, 0, 0, 0]],
+      arp:  [[69, 72, 76, 72, 69, 72, 76, 79, 76, 72, 69, 72, 76, 72, 69, 67],
+             [67, 71, 74, 71, 67, 71, 74, 79, 74, 71, 67, 71, 74, 71, 67, 65],
+             [65, 69, 72, 69, 65, 69, 72, 76, 72, 69, 65, 69, 72, 69, 65, 64],
+             [64, 68, 71, 68, 64, 68, 71, 76, 71, 68, 64, 68, 71, 71, 71, 71]],
+      lead: [[0, 0, 0, 0, 0, 0, 0, 0, 88, 0, 0, 0, 0, 0, 0, 0],
+             [0, 0, 0, 0, 0, 0, 0, 0, 86, 0, 0, 0, 0, 0, 0, 0],
+             [0, 0, 0, 0, 0, 0, 0, 0, 84, 0, 0, 0, 0, 0, 0, 0],
+             [0, 0, 0, 0, 0, 0, 0, 0, 83, 0, 0, 0, 83, 0, 0, 0]],
+      kick: [], snare: [], hat: [0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0],
+    },
+    battle: {
+      bpm: 132,
+      volume: 0.2,
+      bass: [[45, 45, 0, 45, 45, 0, 45, 0, 45, 45, 0, 45, 48, 0, 47, 0],
+             [45, 45, 0, 45, 45, 0, 45, 0, 45, 45, 0, 45, 43, 0, 41, 0],
+             [41, 41, 0, 41, 41, 0, 41, 0, 41, 41, 0, 41, 43, 0, 45, 0],
+             [43, 43, 0, 43, 43, 0, 43, 0, 47, 47, 0, 47, 48, 0, 50, 0]],
+      arp:  [[0, 69, 0, 72, 0, 76, 0, 72, 0, 69, 0, 72, 0, 76, 0, 79],
+             [0, 69, 0, 72, 0, 76, 0, 72, 0, 69, 0, 72, 0, 74, 0, 76],
+             [0, 65, 0, 69, 0, 72, 0, 69, 0, 65, 0, 69, 0, 72, 0, 76],
+             [0, 67, 0, 71, 0, 74, 0, 71, 0, 67, 0, 71, 0, 74, 0, 77]],
+      lead: [[81, 0, 0, 84, 0, 83, 0, 81, 0, 0, 79, 0, 81, 0, 0, 0],
+             [81, 0, 0, 84, 0, 86, 0, 84, 0, 0, 83, 0, 81, 0, 79, 0],
+             [77, 0, 0, 81, 0, 84, 0, 81, 0, 0, 79, 0, 77, 0, 0, 0],
+             [79, 0, 83, 0, 86, 0, 88, 0, 86, 0, 83, 0, 79, 0, 0, 0]],
+      kick:  [1, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 1, 0],
+      snare: [0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1],
+      hat:   [1, 0, 1, 1, 1, 0, 1, 0, 1, 0, 1, 1, 1, 0, 1, 1],
+    },
+    boss: {
+      bpm: 152,
+      volume: 0.24,
+      heavy: true,
+      bass: [[38, 38, 38, 0, 38, 0, 38, 38, 39, 0, 39, 0, 38, 0, 36, 0],
+             [38, 38, 38, 0, 38, 0, 38, 38, 41, 0, 41, 0, 40, 0, 38, 0],
+             [36, 36, 36, 0, 36, 0, 36, 36, 37, 0, 37, 0, 36, 0, 34, 0],
+             [33, 33, 33, 0, 33, 0, 34, 0, 36, 0, 37, 0, 38, 0, 40, 41]],
+      arp:  [[62, 0, 65, 0, 69, 0, 65, 0, 62, 0, 65, 0, 70, 0, 69, 0],
+             [62, 0, 65, 0, 69, 0, 65, 0, 62, 0, 66, 0, 69, 0, 68, 0],
+             [60, 0, 63, 0, 67, 0, 63, 0, 60, 0, 63, 0, 68, 0, 67, 0],
+             [57, 0, 60, 0, 65, 0, 62, 0, 65, 0, 68, 0, 70, 0, 73, 0]],
+      lead: [[86, 0, 0, 0, 85, 0, 0, 0, 86, 0, 89, 0, 88, 0, 86, 0],
+             [0, 0, 0, 0, 0, 0, 0, 0, 82, 0, 0, 0, 81, 0, 0, 0],
+             [84, 0, 0, 0, 83, 0, 0, 0, 84, 0, 87, 0, 86, 0, 84, 0],
+             [89, 0, 88, 0, 86, 0, 84, 0, 83, 0, 81, 0, 80, 0, 0, 0]],
+      kick:  [1, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 0, 1, 0],
+      snare: [0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 1],
+      hat:   [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+    },
+    victory: {
+      bpm: 128,
+      volume: 0.22,
+      once: true,
+      bass: [[41, 0, 0, 0, 41, 0, 0, 0, 43, 0, 0, 0, 45, 0, 0, 0],
+             [48, 0, 0, 0, 48, 0, 0, 0, 48, 0, 0, 0, 48, 0, 0, 0]],
+      arp:  [[65, 69, 72, 77, 72, 69, 65, 69, 72, 76, 79, 84, 79, 76, 72, 76],
+             [72, 76, 79, 84, 79, 84, 88, 84, 88, 0, 0, 0, 0, 0, 0, 0]],
+      lead: [[89, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 91, 0, 0, 0],
+             [93, 0, 0, 0, 96, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]],
+      kick:  [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1],
+      snare: [0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0],
+      hat:   [1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 1],
+    },
+  };
+
+  let timer = null;
+  let track = null;
+  let trackName = "";
+  let step = 0;
+  let nextStepTime = 0;
+  let ducked = false;
+
+  function noiseSource() {
+    const source = audioContext.createBufferSource();
+    source.buffer = noiseBuffer;
+    return source;
+  }
+
+  function envelope(node, time, peak, attack, decay) {
+    node.gain.setValueAtTime(0.0001, time);
+    node.gain.linearRampToValueAtTime(peak, time + attack);
+    node.gain.exponentialRampToValueAtTime(0.0001, time + attack + decay);
+  }
+
+  function bassVoice(midi, time, dur, heavy) {
+    const osc = audioContext.createOscillator();
+    const sub = audioContext.createOscillator();
+    const filter = audioContext.createBiquadFilter();
+    const gain = audioContext.createGain();
+    osc.type = heavy ? "sawtooth" : "square";
+    sub.type = "sine";
+    osc.frequency.value = midiToFreq(midi);
+    sub.frequency.value = midiToFreq(midi - 12);
+    filter.type = "lowpass";
+    filter.frequency.setValueAtTime(heavy ? 1700 : 1100, time);
+    filter.frequency.exponentialRampToValueAtTime(320, time + dur);
+    filter.Q.value = heavy ? 7 : 3;
+    envelope(gain, time, heavy ? 0.5 : 0.38, 0.008, dur);
+    osc.connect(filter);
+    sub.connect(filter);
+    filter.connect(gain).connect(musicGain);
+    osc.start(time); sub.start(time);
+    osc.stop(time + dur + 0.05); sub.stop(time + dur + 0.05);
+  }
+
+  function plucked(midi, time, dur, type, peak, detune) {
+    const osc = audioContext.createOscillator();
+    const gain = audioContext.createGain();
+    osc.type = type;
+    osc.frequency.value = midiToFreq(midi);
+    if (detune) osc.detune.value = detune;
+    envelope(gain, time, peak, 0.006, dur);
+    osc.connect(gain).connect(musicGain);
+    osc.start(time);
+    osc.stop(time + dur + 0.05);
+  }
+
+  function kick(time) {
+    const osc = audioContext.createOscillator();
+    const gain = audioContext.createGain();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(140, time);
+    osc.frequency.exponentialRampToValueAtTime(42, time + 0.13);
+    envelope(gain, time, 0.75, 0.004, 0.16);
+    osc.connect(gain).connect(musicGain);
+    osc.start(time);
+    osc.stop(time + 0.25);
+  }
+
+  function snare(time) {
+    const source = noiseSource();
+    const filter = audioContext.createBiquadFilter();
+    const gain = audioContext.createGain();
+    filter.type = "highpass";
+    filter.frequency.value = 1400;
+    envelope(gain, time, 0.32, 0.003, 0.13);
+    source.connect(filter).connect(gain).connect(musicGain);
+    source.start(time);
+    source.stop(time + 0.2);
+  }
+
+  function hat(time, open) {
+    const source = noiseSource();
+    const filter = audioContext.createBiquadFilter();
+    const gain = audioContext.createGain();
+    filter.type = "highpass";
+    filter.frequency.value = 7000;
+    envelope(gain, time, 0.12, 0.002, open ? 0.09 : 0.03);
+    source.connect(filter).connect(gain).connect(musicGain);
+    source.start(time);
+    source.stop(time + 0.14);
+  }
+
+  function scheduleStep(index, time) {
+    const bars = track.bass.length;
+    const bar = Math.floor(index / 16) % bars;
+    const slot = index % 16;
+    const stepDur = 60 / track.bpm / 4;
+
+    const bassNote = track.bass[bar][slot];
+    if (bassNote) bassVoice(bassNote, time, stepDur * 1.6, track.heavy);
+
+    const arpNote = track.arp[bar][slot];
+    if (arpNote) plucked(arpNote, time, stepDur * 1.1, track.heavy ? "sawtooth" : "square", 0.1, 6);
+
+    const leadNote = track.lead[bar][slot];
+    if (leadNote) {
+      plucked(leadNote, time, stepDur * 3, "triangle", 0.22);
+      plucked(leadNote, time, stepDur * 3, "square", 0.05, -8);
+    }
+    if (track.kick[slot]) kick(time);
+    if (track.snare[slot]) snare(time);
+    if (track.hat.length && track.hat[slot]) hat(time, slot % 4 === 2);
+  }
+
+  function tick() {
+    if (!track) return;
+    const stepDur = 60 / track.bpm / 4;
+    while (nextStepTime < audioContext.currentTime + SCHEDULE_AHEAD) {
+      const total = track.bass.length * 16;
+      if (track.once && step >= total) { stop(); return; }
+      scheduleStep(step % total, nextStepTime);
+      step++;
+      nextStepTime += stepDur;
+    }
+  }
+
+  function fade(target, seconds) {
+    const now = audioContext.currentTime;
+    musicGain.gain.cancelScheduledValues(now);
+    musicGain.gain.setValueAtTime(musicGain.gain.value, now);
+    musicGain.gain.linearRampToValueAtTime(target, now + seconds);
+  }
+
+  function stop() {
+    if (timer) { clearInterval(timer); timer = null; }
+    track = null;
+    trackName = "";
+    if (audioContext) fade(0, 0.35);
+  }
+
+  function play(name) {
+    if (!ensureAudio()) return;
+    if (audioContext.state === "suspended") audioContext.resume();
+    if (trackName === name && timer) return;
+    if (timer) clearInterval(timer);
+    track = TRACKS[name];
+    trackName = name;
+    if (!track) { stop(); return; }
+    step = 0;
+    nextStepTime = audioContext.currentTime + 0.06;
+    fade(ducked ? track.volume * 0.3 : track.volume, 0.6);
+    timer = setInterval(tick, LOOKAHEAD_MS);
+    tick();
+  }
+
+  function setDucked(next) {
+    ducked = next;
+    if (!audioContext || !track) return;
+    fade(next ? track.volume * 0.28 : track.volume, 0.25);
+  }
+
+  return { play, stop, setDucked, current: () => trackName };
+})();
 
 // The direction the arrow keys currently describe. `held` is false when no
 // arrow is down, in which case we report the last direction aimed at so the
@@ -1460,9 +2596,15 @@ function updateChargeMeter() {
     return;
   }
   const held = performance.now() - chargeStartedAt;
-  setWidth(dom.chargeFill, Math.min(100, held / 2500 * 100));
+  const full = held >= CHARGE_FULL_MS;
+  setWidth(dom.chargeFill, Math.min(100, held / CHARGE_FULL_MS * 100));
   setChargeColor(held < 850 ? "#63ff91" : held < 1700 ? "#ff9d32" : "#ff4747");
+  if (full !== chargeMeterFull) {
+    chargeMeterFull = full;
+    dom.chargeMeter.classList.toggle("full", full);
+  }
 }
+let chargeMeterFull = false;
 
 const CONE_ANGLES = [-0.16, 0, 0.16];
 
@@ -1500,10 +2642,55 @@ function showLoading(callback) {
   }, 200);
 }
 
+// A coarse first guess so a weak machine doesn't have to spend its first seconds
+// dropping tiers: few cores usually means a weak GPU too. `?quality=low` (or
+// high/medium/potato) pins a tier for testing and disables the auto-tuning.
+const requestedQuality = new URLSearchParams(location.search).get("quality");
+const pinnedIndex = QUALITY_TIERS.findIndex((tier) => tier.name === requestedQuality);
+if (pinnedIndex >= 0) {
+  qualityPinned = true;
+  qualityIndex = pinnedIndex;
+  quality = QUALITY_TIERS[pinnedIndex];
+} else if ((navigator.hardwareConcurrency || 4) <= 4) {
+  qualityIndex = 1;
+  quality = QUALITY_TIERS[1];
+}
+document.documentElement.dataset.quality = quality.name;
+
 resize();
 initStars();
 refreshLoadoutUI();
+setTheme(playerColor);
 requestAnimationFrame(frame);
+
+// --- title card ------------------------------------------------------------
+// "DANIEL AND PETROS PRESENT..." holds for a beat, then hands over to the menu.
+const CREDITS_HOLD_MS = 2600;
+let creditsDone = false;
+
+function finishCredits() {
+  if (creditsDone) return;
+  creditsDone = true;
+  const credits = document.getElementById("credits-screen");
+  credits.classList.add("fading");
+  document.getElementById("menu-wrap").classList.remove("hidden");
+  setTimeout(() => credits.classList.add("gone"), 750);
+}
+setTimeout(finishCredits, CREDITS_HOLD_MS);
+// a click or key skips the wait
+document.getElementById("credits-screen").addEventListener("click", finishCredits);
+
+// Browsers won't let audio start before a gesture, so the menu track waits for
+// the player's first click or keypress and then comes in.
+function unlockAudio() {
+  ensureAudio();
+  if (audioContext && audioContext.state === "suspended") audioContext.resume();
+  if (!gameActive) music.play("menu");
+  window.removeEventListener("pointerdown", unlockAudio);
+  window.removeEventListener("keydown", unlockAudio);
+}
+window.addEventListener("pointerdown", unlockAudio);
+window.addEventListener("keydown", unlockAudio);
 
 document.getElementById("start-btn").addEventListener("click", function () {
   showLoading(startGame);
@@ -1511,28 +2698,24 @@ document.getElementById("start-btn").addEventListener("click", function () {
 document.getElementById("try-again-btn").addEventListener("click", function () {
   showLoading(startGame);
 });
-document.getElementById("main-menu-btn").addEventListener("click", function () {
-  gameActive = false;
-  bossMode = false;
-  bossIntro = false;
-  document.getElementById("game-ui").classList.remove("active");
-  document.getElementById("menu-wrap").classList.remove("hidden");
-  document.getElementById("game-message").textContent = "";
-  document.getElementById("try-again-btn").classList.remove("visible");
-  document.getElementById("main-menu-btn").classList.remove("visible");
+document.getElementById("main-menu-btn").addEventListener("click", returnToMenu);
+document.getElementById("resume-btn").addEventListener("click", function () {
+  setPaused(false);
 });
+document.getElementById("pause-menu-btn").addEventListener("click", returnToMenu);
 document.getElementById("continue-boss").addEventListener("click", startBossFight);
 document.getElementById("victory-continue").addEventListener("click", function () {
   document.getElementById("victory-screen").classList.remove("visible");
   document.getElementById("victory-screen").setAttribute("aria-hidden", "true");
-  gamePaused = false;
+  setPaused(false);
   bossIntro = false;
   bossMode = false;
+  music.play("battle");
   wave = 6;
   player.x = W / 2; player.y = H - 80; player.vx = 0; player.vy = 0;
   enemyBullets = [];
   createEnemies();
-  showWaveCleared(5);
+  showWaveBanner("WAVE 6", "MERCURY'S SURVIVORS");
 });
 document.getElementById("admin-submit").addEventListener("click", function () {
   const input = document.getElementById("admin-code");
@@ -1556,8 +2739,10 @@ document.getElementById("controls-btn").addEventListener("click", function () {
 });
 document.querySelectorAll(".color-choice").forEach((choice) => choice.addEventListener("click", function () {
   playerColor = choice.dataset.color;
+  setTheme(playerColor);
   document.querySelectorAll(".color-choice").forEach((item) => item.classList.remove("selected"));
   choice.classList.add("selected");
+  playSound(760, 0.07, "square");
 }));
 document.getElementById("controls-close").addEventListener("click", function () {
   const panel = document.getElementById("controls-panel");
@@ -1614,10 +2799,7 @@ window.addEventListener("keydown", function (e) {
   }
   if (gameActive && e.code === "Escape") {
     e.preventDefault();
-    if (!e.repeat) {
-      gamePaused = !gamePaused;
-      document.getElementById("game-message").textContent = gamePaused ? "PAUSED" : "";
-    }
+    if (!e.repeat && !bossIntro) setPaused(!gamePaused);
   }
   if (gameActive && e.code === "Space") {
     e.preventDefault();
@@ -1632,10 +2814,16 @@ window.addEventListener("keyup", function (e) {
     return;
   }
   if (e.code === "Space" && gameActive && !bossIntro && !gamePaused && performance.now() - spaceDownAt <= 180 && superMeter >= 1) {
-    if (selectedSuper === "invincibility") { playerInvulnerable = 300; invincibilitySuperTimer = 300; lastSuperKills = superDamage; superMeter = 0; updateSuperMeter(); return; }
-    if (selectedSuper === "void") { superBombs.push({ x: player.x, y: player.y, vx: facing.x * 8, vy: facing.y * 8, life: 75, explode: false, void: true }); lastSuperKills = superDamage; superMeter = 0; updateSuperMeter(); return; }
-    superBombs.push({ x: player.x, y: player.y, vx: facing.x * 8, vy: facing.y * 8, life: 75, explode: false });
-    playSound(180, 0.18, "triangle");
+    if (selectedSuper === "invincibility") {
+      playerInvulnerable = 300;
+      invincibilitySuperTimer = 300;
+      playSound(880, 0.3, "triangle");
+    } else if (selectedSuper === "lance") {
+      fireLance();
+    } else {
+      superBombs.push({ x: player.x, y: player.y, vx: facing.x * 8, vy: facing.y * 8, life: 75, explode: false });
+      playSound(180, 0.18, "triangle");
+    }
     lastSuperKills = superDamage;
     superMeter = 0;
     updateSuperMeter();
