@@ -7,7 +7,7 @@ no package manager — plain HTML + CSS + a single `<canvas>` game loop in vanil
 
 | File | Role |
 | --- | --- |
-| `index.html` | All DOM: menu, weapons/controls modals, loading screen, HUD, boss intro, victory screen. Loads `main.js?v=16` (bump the query string to bust cache). |
+| `index.html` | All DOM: menu, weapons/controls/change-log modals, loading screen, HUD, boss intro, victory/defeat screens. Loads the CSS and `main.js` with versioned query strings (bump changed assets to bust cache). |
 | `main.js` | The entire game: state, render loop, physics, collisions, input, music/SFX synthesis, UI wiring. |
 | `style.css` | Retro arcade-cabinet theme: CRT scanline overlay, pixel type, hard-edged chunky controls. Uses Bangers (title) and Press Start 2P (everything else) from Google Fonts. |
 | `favicon.svg` | Inline red "P" mark. |
@@ -103,6 +103,8 @@ goes stale and silently swallows the next real write.
 6. On defeat: `startBossDeath()` runs a ~175-frame sequence — chained surface blasts,
    then one big detonation at frame 126 that scatters debris — before `finishBossDeath()`
    grants `+1 HP`, sets `wave = 6` and opens `showVictory()`.
+7. Continuing enters Venus airspace for waves 6–9. Wave 10 still uses placeholder wave logic;
+   no Venus boss encounter has been implemented yet.
 
 ### Mercury
 
@@ -113,10 +115,11 @@ debris swarm that orbits on per-shard inclinations, drawn behind and in front of
 The face tracks the ship — pupils follow the player, the body leans toward them, and it blinks
 on its own timer.
 
-It also **moves**: `bossDrift` sweeps it across the arena with a light bias toward the player,
-and `bossBurstTimer` fires a slow eight-way radial burst roughly every 9 seconds. Its homing
-meteor tracks for a shorter window, while the three-way spread has a longer telegraph and
-recovery. These patterns deny static safe spots without making the first boss overly punishing.
+It also **moves** lower in the arena: `bossDrift` sweeps it laterally with a stronger bias toward
+the player's position. `trackedBossAngle()` leads the player's velocity for aimed attacks.
+Meteor volleys randomly choose single homing, paired tracking, or three-way predictive shots;
+the orb attack chooses a three-shot fan, five-shot fan, or fast pair; radial bursts randomize
+their count, phase, and recovery. The ranges keep the variety from becoming a pure fire-rate buff.
 
 ### Mercury's animation states
 
@@ -124,8 +127,8 @@ recovery. These patterns deny static safe spots without making the first boss ov
 
 | Counter | Effect |
 | --- | --- |
-| `bossChargeAnim` | Wind-up before a shot: inhale (squash), corona reddens, eyes swell, mouth puckers. |
-| `bossShootAnim` | Recoil: stretch outward, mouth gapes, muzzle particles. |
+| `bossChargeAnim` | Wind-up before a shot: inhale (squash), corona reddens, eyes swell, teeth clench. |
+| `bossShootAnim` | Recoil: stretch outward, mouth opens with two tooth rows and a muzzle flash. |
 | `bossHitFlash` | Damage: white flash, shake, eyes squint, rock chips fly back along the shot. |
 | `bossDeathTimer` | Death: shake, glowing cracks, chained explosions, then fade at the final blast. |
 
@@ -135,16 +138,21 @@ and `bossExplosions` (expanding rings) are the shared effect pools.
 
 ## Enemies
 
-Three types, defined in `ENEMY_TYPES` and driven by `updateEnemy()` / `drawEnemy()`:
+Five types, defined in `ENEMY_TYPES` and driven by `updateEnemy()` / `drawEnemy()`:
 
 | Type | HP | Behaviour |
 | --- | --- | --- |
 | `grunt` | 1 | Holds formation, bobs. Fires the shared slow **homing** shot on `enemyShotTimer`. |
-| `charger` | 2 | `idle → wind → dash → return` state machine. Telegraphs with a red ring, spits two **straight** shots on the wind-up, then lunges at where the player is standing. |
+| `charger` | 2 | `idle → wind → hunt` state machine. Telegraphs with a red ring, then continuously steers into the player until destroyed. It is a pure contact threat and fires no projectiles. |
 | `turret` | 3 | Never moves. Barrel tracks the player; fires a three-way **straight** spread. |
+| `skimmer` | 2 | Venus Acid Skimmer. Sways across a formation lane, tracks the player, then spits a wobbling sulfur-acid globule. |
+| `bloom` | 4 | Venus Furnace Bloom. Opens with a hot pulse and fires a wide radial fan of heat shards. |
 
-`waveRoster(n)` decides the mix (wave 2 introduces chargers, wave 3 turrets, wave 4 both);
-`WAVE_INTROS` supplies the banner subtitle that calls out what's new.
+`waveRoster(n)` decides the mix (wave 2 introduces chargers, wave 3 turrets, wave 4 both,
+and waves 6–9 replace Mercury's forces with increasingly dense Venus formations);
+`WAVE_INTROS` supplies the banner subtitle that calls out what's new. `drawVenusEnvironment()`
+fills post-Mercury waves with drifting sulfur banks and heat lanes without introducing the
+future Venus boss.
 
 **Why the mix matters:** the old game had only grunts firing bullets that homed forever but
 only while `y < H`, so a player could park in a corner and never be touched. Chargers come to
@@ -155,28 +163,39 @@ fixed 150-frame budget and then commits, which makes the tracking honest rather 
 
 Primary weapon (`selectedWeapon`):
 - `blaster` — auto-fires on held arrow keys, `fireCooldown = 10`, 1 damage.
-- `charge` — hold an arrow, release to fire. Damage `1–5` scaled by hold time (`/500ms`),
-  projectile size `3–9`. Charge state lives in `chargeStartedAt` / `chargeDirection`.
-- `cone` — three shots at ±0.16 rad, `fireCooldown = 18`.
+- `charge` — hold an arrow, release to fire. It has three discrete tiers: 1 damage below half,
+  3 damage at half charge with a three-target cap, and 5 damage at full charge with infinite
+  pierce. Each tier is a circular energy ball (5px / 9px / 14px radius) so charge strength is
+  visible in flight. Charge state lives in `chargeStartedAt` / `chargeDirection`.
+- `cone` — three 1-damage shots at ±0.16 rad, `fireCooldown = 18`. `fireCone()` reserves
+  capacity for the entire volley before firing, so the projectile cap can never emit a partial burst.
+- `tech0` — a cyan post-Mercury reward with a 60-frame (one-second) firing cycle. The projectile
+  deals 3 damage on direct impact, then walks a 0.5-damage chain through as many as four
+  additional living enemies within 230px of each previous target. Multiple projectiles are no
+  longer blocked by an active arc.
 
-At full charge the ship visibly catches fire (`drawChargeAura`), and the charged round
-leaves a flame trail.
+While charging, `drawChargeAura()` pulls segmented orange energy arcs toward the ship. At full
+charge the arcs ignite into a tighter orbit while `drawPlayer()` applies a subtle hull shake;
+the full-power round draws a two-layer flame tail and leaves hot ember particles.
 
 Super (`selectedSuper`), fired by a **short** Space tap when `superMeter >= 1`:
-- `bomb` — projectile with a 125px blast radius (15 damage to the boss).
-- `invincibility` ("SHIELD") — 300 frames of `playerInvulnerable` + `invincibilitySuperTimer`.
-- `lance` ("LANCE OF TECH") — a piercing beam locked to the direction fired but anchored to the ship, so it
+- `bomb` — projectile with a 125px blast radius (15 damage to the boss). `bombBlasts` keeps its
+  layered shockwaves, spokes, hot core and debris alive after the projectile is consumed.
+- `invincibility` ("SHIELD") — 180 frames of `playerInvulnerable` + `invincibilitySuperTimer`.
+- `lance` ("TECHNOLOGY") — a piercing beam locked to the direction fired but anchored to the ship, so it
   sweeps as you move. Lives `BEAM_FRAMES`, damages everything within `BEAM_HALF_WIDTH` of its
   centre line every `BEAM_TICK` frames. Replaced the old `void` super, which was never
   implemented — it spawned a bomb flagged `void: true` that nothing read.
 
 Meter math is in `updateSuperMeter()`: `(superDamage - lastSuperKills) / requiredDamage`,
-with costs in `SUPER_COST` (22, 22, 33 for Lance of Tech). `setSelectedSuper()` refunds half on a
+with costs in `SUPER_COST` (22 Bomb, 36 Shield, 33 Technology). `setSelectedSuper()` refunds half on a
 mid-game swap.
 
-When the meter is full, `drawSuperReadyAura()` adds a large pulsing, orbiting glow around the
-ship in `playerColor`. The super HUD and every player weapon/super effect use the same theme
-colour, so changing the ship keeps the whole loadout visually coherent.
+When the meter is full, `drawPlayer()` adds a tight, pulsing neon outline directly around the
+cached `PLAYER_HULL` path in the selected super's color. `WEAPON_COLORS` and `SUPER_COLORS`
+give every player attack a stable palette: yellow Blaster, orange Charge, green Cone, blue Bomb,
+yellow Shield, purple Technology, and cyan Tech.0. The hull and general menu chrome still use
+`playerColor`.
 
 ## Input
 
@@ -186,13 +205,14 @@ colour, so changing the ship keeps the whole loadout visually coherent.
   falls back to `lastArrowDirection` when nothing is held. Firing happens only in `drawGame`
   off `fireCooldown`; arrow keydown just zeroes the cooldown, so a diagonal is one shot at 45°
   rather than one per axis. Movement input is normalized so diagonals aren't ~41% faster.
-- `Space` **hold** (>180ms) — shrink to 0.55 scale: smaller hitbox, 1.4× speed, half damage.
+- `Space` **hold** (>180ms) — shrink to 0.55 scale: smaller hitbox and 1.4× speed, but primary
+  weapons fire at one-third their normal rate. Shot damage is unchanged.
 - `Space` **tap** (≤180ms) — fire super. The hold/tap split is `spaceDownAt` vs `performance.now()`.
 - `Esc` — pause.
 - `blur` — clears all keys so the ship doesn't drift when the tab loses focus.
 - Outside active gameplay, arrow keys move focus spatially through the menu, audio controls,
   loadout grids, pause screen and victory choices. Enter/Space activates the focused control;
-  Escape closes the controls or weapons panel and resumes from pause.
+  Escape closes the active audio drawer, controls or weapons panel before resuming from pause.
 
 ## Admin codes
 
@@ -210,16 +230,24 @@ Typed into the ADMIN CODE box on the menu (`admin-submit` handler):
 ## Front end
 
 - **Theme.** `setTheme(hex)` writes `--theme` / `--theme-rgb` on the root element; those are the
-  only accent tokens the stylesheet reads, so picking a ship colour re-skins the title, buttons,
-  banners, pause card and wave banner to match.
+  ship/menu accent tokens, so picking a ship colour re-skins the title, buttons, banners, pause
+  card and wave banner. Loadout tiles use their own `--loadout-color`, while the active weapon and
+  super update `--weapon-color` / `--super-color` for the combat HUD.
 - **HUD.** Hearts (`setLives()`, rebuilt only when the count changes so the beat animation
   doesn't restart), wave number centred, score right.
-- **Pause.** Escape calls `setPaused()`, which shows `#pause-screen` (RESUME / MAIN MENU) and
+- **Pause.** Escape calls `setPaused()`, which shows `#pause-screen` (RESUME / CONTROLS / AUDIO / MAIN MENU) and
   ducks the music. `returnToMenu()` is the single teardown path shared by the pause card and the
   game-over button.
-- **Audio controls.** The menu and pause card both expose synchronized Music and Game SFX
-  sliders plus a global mute toggle. Preferences are stored under `petros-space-adventure-audio`
+- **Audio controls.** The menu and pause card each use a centered, text-only AUDIO button for
+  synchronized Music and Game SFX sliders
+  plus a global mute toggle inside a collapsed drawer. Preferences are stored under `petros-space-adventure-audio`
   in `localStorage` and applied to the WebAudio buses without restarting the active track.
+- **Change log.** The bottom-left `CHANGE LOG 0.1` button opens a scrollable version-history panel.
+  Add each shipped release as a new retained entry so older notes remain available; do not invent old releases.
+- **Mercury defeat.** Losing during `bossMode` opens `#mercury-defeat-screen` with a sinister,
+  red-eyed looping laugh portrait, Mercury's quote, and dedicated retry/menu actions instead of
+  the generic game-over UI. The defeated-Mercury victory portrait keeps its tongue extended and
+  gently retracts it on a short loop, like panting.
 
 ## Music
 
@@ -242,6 +270,16 @@ EQUIPPED flag on the active tile), the victory-screen choices, and the loadout r
 menu button and panel footer. Nothing else touches the `.selected` class; go through
 `setSelectedWeapon()` / `setSelectedSuper()`.
 
+The first three primaries stay in the fixed grid. `primary-more-toggle` expands
+`extra-primary-guns`, which currently contains Tech.0 and keeps added primaries from widening the
+panel beyond the viewport. Opening the panel auto-expands the section when Tech.0 is equipped.
+
+Mercury progression is stored under `petros-space-adventure-mercury-rewards`. Before the first
+victory, the Grey ship swatch and Tech.0 tiles remain visibly locked and open the Mercury reward
+prompt when selected. `showVictory()` calls `unlockMercuryRewards()` before painting the victory
+loadout, so Tech.0 can be equipped immediately on that screen and both rewards stay available on
+future visits.
+
 ## Conventions
 
 - Vanilla ES2020+ in the browser; no transpiling, no imports. Keep it that way.
@@ -249,7 +287,7 @@ menu button and panel footer. Nothing else touches the `.selected` class; go thr
   `translate`/`rotate`; reset `ctx.shadowBlur = 0` after any glow.
 - SFX are generated on the fly via `playSound(freq, duration, type)`; the `AudioContext` is
   created lazily by `ensureAudio()` and every call no-ops if it is null.
-- `sparks` is the shared particle pool for every arena (thruster trails, charge flames, debris);
+- `sparks` is the shared particle pool for every arena (thruster trails, projectile flames, debris);
   `bossParticles` / `bossExplosions` are boss-arena only.
 - Collisions are cheap: axis-aligned `Math.abs` box checks for enemies/bullets,
   `Math.hypot` circles for the boss and blasts.
@@ -258,8 +296,8 @@ menu button and panel footer. Nothing else touches the `.selected` class; go thr
   `lastArrowDirection` and `currentAimVector()`'s result are mutated, never replaced. Per-frame
   `filter`/object literals are the main source of GC pauses here.
 - **Anything constant is built once**, not per frame: the boss arena grid is stroked into the
-  `bossGridLayer` offscreen canvas on resize and blitted; Mercury's body/terminator/mouth
-  gradients and the warp starfield's `rgba()` strings are cached; the corona gradient is
+  `bossGridLayer` offscreen canvas on resize and blitted; the player hull is a cached `Path2D`;
+  Mercury's body/terminator gradients and the warp starfield's `rgba()` strings are cached; the corona gradient is
   rebuilt only when its radius or colour changes. Creating a gradient or setting a clip every
   frame is expensive — reach for a cache first.
 - The canvas context is opaque (`alpha: false`) and always painted edge to edge; don't rely
@@ -271,7 +309,7 @@ menu button and panel footer. Nothing else touches the `.selected` class; go thr
 - Don't clear to black before something that repaints every pixel anyway — `draw()` skips the
   clear when `drawBossArea`/`drawTestRoom` is about to fill the screen. A redundant
   full-screen fill is the most expensive kind of no-op there is.
-- Enemy and boss colours remain fixed for readability. Every player-owned projectile, charge
-  effect, super, loadout preview and HUD accent instead reads from `playerColor` / the CSS
-  `--theme` tokens.
+- Enemy and boss colours remain fixed for readability. Player projectiles and charge effects read
+  from `WEAPON_COLORS`; supers, their ready outline and super HUD read from `SUPER_COLORS`; only
+  the ship and shared menu chrome read from `playerColor` / the CSS `--theme` tokens.
 - After editing `main.js`, bump the `?v=` in `index.html`'s script tag.

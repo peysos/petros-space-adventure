@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Bangers&family=Press+Start+2P&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="style.css?v=25" />
 </head>
 <body>
   <canvas id="space-bg"></canvas>
@@ -28,15 +28,19 @@
       <p class="subtitle">SPACE ADVENTURE</p>
       <button class="start-btn" id="start-btn" type="button">START</button>
       <button class="controls-btn" id="weapons-btn" type="button">WEAPONS<small id="loadout-readout">BLASTER + BOMB</small></button>
-      <button class="controls-btn link-btn" id="controls-btn" type="button">CONTROLS</button>
+      <button class="controls-btn" id="controls-btn" type="button">CONTROLS</button>
       <section class="audio-controls menu-audio" aria-label="Audio settings">
-        <div class="audio-heading"><span>AUDIO</span><button class="audio-mute" data-audio-mute type="button" aria-pressed="false">SOUND ON</button></div>
-        <label class="audio-row"><span>MUSIC</span><input data-audio-control="music" type="range" min="0" max="100" step="5" value="100" /><output data-audio-output="music">100%</output></label>
-        <label class="audio-row"><span>GAME SFX</span><input data-audio-control="sfx" type="range" min="0" max="100" step="5" value="90" /><output data-audio-output="sfx">90%</output></label>
+        <button class="audio-toggle" data-audio-toggle type="button" aria-expanded="false" aria-controls="menu-audio-drawer">AUDIO</button>
+        <div class="audio-drawer" id="menu-audio-drawer" hidden>
+          <div class="audio-heading"><span>MIX</span><button class="audio-mute" data-audio-mute type="button" aria-pressed="false">SOUND ON</button></div>
+          <label class="audio-row"><span>MUSIC</span><input data-audio-control="music" type="range" min="0" max="100" step="5" value="100" /><output data-audio-output="music">100%</output></label>
+          <label class="audio-row"><span>GAME SFX</span><input data-audio-control="sfx" type="range" min="0" max="100" step="5" value="90" /><output data-audio-output="sfx">90%</output></label>
+        </div>
       </section>
-      <div class="color-selector"><span>SHIP COLOR</span><div class="color-options"><button class="color-choice cyan selected" data-color="#7ef9ff" aria-label="Cyan"></button><button class="color-choice red" data-color="#ff4f4f" aria-label="Red"></button><button class="color-choice green" data-color="#63ff91" aria-label="Green"></button><button class="color-choice yellow" data-color="#ffdc5a" aria-label="Yellow"></button><button class="color-choice pink" data-color="#ff72c8" aria-label="Pink"></button></div></div>
+      <div class="color-selector"><span>SHIP COLOR</span><div class="color-options"><button class="color-choice cyan selected" data-color="#7ef9ff" aria-label="Cyan"></button><button class="color-choice red" data-color="#ff4f4f" aria-label="Red"></button><button class="color-choice green" data-color="#63ff91" aria-label="Green"></button><button class="color-choice yellow" data-color="#ffdc5a" aria-label="Yellow"></button><button class="color-choice pink" data-color="#ff72c8" aria-label="Pink"></button><button class="color-choice grey locked" data-color="#b9b9c0" data-mercury-locked aria-label="Grey ship locked: beat Mercury" aria-disabled="true"></button></div><small class="unlock-note" id="mercury-unlock-note">GREY LOCKED — BEAT MERCURY</small></div>
       <div class="admin-code"><input id="admin-code" type="text" placeholder="ADMIN CODE" autocomplete="off" /><button id="admin-submit" type="button">OK</button><small id="admin-status"></small></div>
     </div>
+    <button class="changelog-btn" id="changelog-btn" type="button">CHANGE LOG <span>0.1</span></button>
   </div>
 
   <div class="controls-panel" id="controls-panel" aria-hidden="true">
@@ -51,6 +55,50 @@
     </div>
   </div>
 
+  <div class="controls-panel changelog-panel" id="changelog-panel" aria-hidden="true">
+    <article class="changelog-card">
+      <button class="controls-close" id="changelog-close" type="button" aria-label="Close change log">×</button>
+      <h2>CHANGE LOG</h2>
+      <p class="changelog-lead">A scrollable history of every tracked Petros Space Adventure release.</p>
+      <div class="changelog-history" tabindex="0" aria-label="Change log version history">
+        <div class="changelog-release">
+          <p class="changelog-version">VERSION 0.1</p>
+          <p class="changelog-release-intro">The first tracked gameplay and presentation update.</p>
+          <section>
+            <h3>PLAYER &amp; COMBAT</h3>
+            <ul>
+              <li>Set Blaster and Shield to yellow, Charge to orange, Cone to green, Bomb to blue, and Technology to purple in the selector and combat.</li>
+              <li>Rebalanced super gain, shrink-mode firing, and the Charge weapon's three power tiers.</li>
+              <li>Guaranteed complete three-shot Cone bursts and added an energized Charge wind-up with a flaming full-charge round.</li>
+              <li>Added three visibly larger Charge-ball tiers and the cyan Tech.0 chain-lightning primary.</li>
+              <li>Reworked Tech.0 from the concept art: 3 impact damage, four 0.5-damage chain hops, and a one-second firing cycle.</li>
+              <li>Raised Shield's cost and shortened its protection window, while giving Bomb a layered shockwave detonation.</li>
+              <li>Chargers now pursue the player continuously as projectile-free contact threats.</li>
+            </ul>
+          </section>
+          <section>
+            <h3>MERCURY</h3>
+            <ul>
+              <li>Improved tracking, attack variety, telegraphs, facial animation, and arena placement.</li>
+              <li>Refreshed the boss health display and Mercury-destroyed victory presentation with a clearer heart reward.</li>
+              <li>Added a dedicated defeat screen where a more sinister laughing Mercury delivers his victory line.</li>
+              <li>Beating Mercury now permanently unlocks the Grey Ship and Tech.0, with a clear lock prompt beforehand.</li>
+              <li>Introduced Venus's sulfur-cloud environment, Acid Skimmers, and Furnace Blooms across post-Mercury waves 6–9.</li>
+            </ul>
+          </section>
+          <section>
+            <h3>MENUS &amp; AUDIO</h3>
+            <ul>
+              <li>Added centered, expandable audio settings, pause-menu controls, and ship-color keyboard focus.</li>
+              <li>Renamed the beam super to Technology and gave every loadout tile its own matching palette.</li>
+              <li>Moved additional primaries into an expandable section so future weapons stay inside the selector at every screen size.</li>
+            </ul>
+          </section>
+        </div>
+      </div>
+    </article>
+  </div>
+
   <div class="controls-panel" id="weapons-panel" aria-hidden="true">
     <div class="weapons-card">
       <button class="controls-close" id="weapons-close" type="button" aria-label="Close weapons">×</button>
@@ -59,19 +107,35 @@
         <h3>PRIMARY GUN</h3>
         <div class="weapon-grid">
           <button class="weapon-tile selected" data-weapon="blaster"><span class="tile-badge">EQUIPPED</span><span class="projectile-preview blaster-preview"></span><strong>BLASTER</strong><small>Fast, steady fire</small></button>
-          <button class="weapon-tile" data-weapon="charge"><span class="tile-badge">EQUIPPED</span><span class="projectile-preview charge-preview"></span><strong>CHARGE</strong><small>Hold arrow, then release<br>Ignites at max: 5 damage</small></button>
+          <button class="weapon-tile" data-weapon="charge"><span class="tile-badge">EQUIPPED</span><span class="projectile-preview charge-preview"></span><strong>CHARGE</strong><small>Growing energy balls<br>Full charge: infinite pierce</small></button>
           <button class="weapon-tile" data-weapon="cone"><span class="tile-badge">EQUIPPED</span><span class="projectile-preview cone-preview"><i></i><i></i><i></i></span><strong>CONE</strong><small>Three shots<br>Slower fire rate</small></button>
+        </div>
+        <button class="primary-more-toggle" id="primary-more-toggle" type="button" aria-expanded="false" aria-controls="extra-primary-guns">MORE PRIMARY GUNS <span>▼</span></button>
+        <div class="extra-primary-guns" id="extra-primary-guns" hidden>
+          <div class="weapon-grid">
+            <button class="weapon-tile locked" data-weapon="tech0" data-mercury-locked aria-disabled="true"><span class="tile-badge">EQUIPPED</span><span class="unlock-badge">LOCKED</span><span class="projectile-preview tech0-preview"></span><strong>TECH.0</strong><small>3 impact / 0.5 chain<br>4 hops / 1 second</small></button>
+          </div>
         </div>
       </section>
       <section class="loadout-section super-section">
         <h3>SUPER ATTACK</h3>
         <div class="weapon-grid">
           <button class="weapon-tile super-tile selected" data-super="bomb"><span class="tile-badge">EQUIPPED</span><span class="projectile-preview bomb-preview"></span><strong>BOMB</strong><small>Large blast</small></button>
-          <button class="weapon-tile super-tile" data-super="invincibility"><span class="tile-badge">EQUIPPED</span><span class="projectile-preview shield-preview"></span><strong>SHIELD</strong><small>5 seconds of<br>invincibility</small></button>
-          <button class="weapon-tile super-tile" data-super="lance"><span class="tile-badge">EQUIPPED</span><span class="projectile-preview lance-preview"><i></i></span><strong>LANCE OF TECH</strong><small>Piercing beam<br>Burns everything in line</small></button>
+          <button class="weapon-tile super-tile" data-super="invincibility"><span class="tile-badge">EQUIPPED</span><span class="projectile-preview shield-preview"></span><strong>SHIELD</strong><small>3 seconds of<br>invincibility</small></button>
+          <button class="weapon-tile super-tile" data-super="lance"><span class="tile-badge">EQUIPPED</span><span class="projectile-preview lance-preview"><i></i></span><strong>TECHNOLOGY</strong><small>Piercing beam<br>Burns everything in line</small></button>
         </div>
       </section>
       <p class="loadout-summary">LOADOUT <strong id="loadout-summary-text">BLASTER + BOMB</strong></p>
+    </div>
+  </div>
+
+  <div class="controls-panel" id="mercury-lock-panel" aria-hidden="true">
+    <div class="unlock-card">
+      <button class="controls-close" id="mercury-lock-close" type="button" aria-label="Close unlock message">×</button>
+      <div class="lock-mercury" aria-hidden="true"><i></i><i></i><b></b></div>
+      <p>REWARD LOCKED</p>
+      <h2>BEAT MERCURY</h2>
+      <small>Defeat Mercury once to unlock<br />the Grey Ship and Tech.0.</small>
     </div>
   </div>
 
@@ -102,12 +166,16 @@
   <div class="pause-screen" id="pause-screen" aria-hidden="true">
     <div class="pause-card">
       <h2>PAUSED</h2>
-      <section class="audio-controls pause-audio" aria-label="Audio settings">
-        <div class="audio-heading"><span>AUDIO</span><button class="audio-mute" data-audio-mute type="button" aria-pressed="false">SOUND ON</button></div>
-        <label class="audio-row"><span>MUSIC</span><input data-audio-control="music" type="range" min="0" max="100" step="5" value="100" /><output data-audio-output="music">100%</output></label>
-        <label class="audio-row"><span>GAME SFX</span><input data-audio-control="sfx" type="range" min="0" max="100" step="5" value="90" /><output data-audio-output="sfx">90%</output></label>
-      </section>
       <button id="resume-btn" type="button">RESUME</button>
+      <button id="pause-controls-btn" class="ghost" type="button">CONTROLS</button>
+      <section class="audio-controls pause-audio" aria-label="Audio settings">
+        <button class="audio-toggle" data-audio-toggle type="button" aria-expanded="false" aria-controls="pause-audio-drawer">AUDIO</button>
+        <div class="audio-drawer" id="pause-audio-drawer" hidden>
+          <div class="audio-heading"><span>MIX</span><button class="audio-mute" data-audio-mute type="button" aria-pressed="false">SOUND ON</button></div>
+          <label class="audio-row"><span>MUSIC</span><input data-audio-control="music" type="range" min="0" max="100" step="5" value="100" /><output data-audio-output="music">100%</output></label>
+          <label class="audio-row"><span>GAME SFX</span><input data-audio-control="sfx" type="range" min="0" max="100" step="5" value="90" /><output data-audio-output="sfx">90%</output></label>
+        </div>
+      </section>
       <button id="pause-menu-btn" class="ghost" type="button">MAIN MENU</button>
       <p class="key-hint">PRESS <span>ESC</span> TO RESUME</p>
     </div>
@@ -119,7 +187,12 @@
   <div class="victory-screen" id="victory-screen" aria-hidden="true">
     <div class="victory-rays" aria-hidden="true"></div>
     <div class="victory-card">
-      <div class="victory-badge"><span>★</span></div>
+      <div class="victory-mercury" role="img" aria-label="Mercury defeated with cartoon X eyes and its tongue out">
+        <span class="dead-eye dead-eye-left">×</span>
+        <span class="dead-eye dead-eye-right">×</span>
+        <span class="dead-mouth"></span>
+        <span class="dead-tongue"></span>
+      </div>
       <div class="victory-title">MERCURY<br />DESTROYED</div>
       <div class="victory-player" id="victory-player-name">PLAYER</div>
       <div class="victory-stats">
@@ -133,11 +206,12 @@
           <button class="victory-choice selected" data-victory-weapon="blaster" type="button">BLASTER</button>
           <button class="victory-choice" data-victory-weapon="charge" type="button">CHARGE</button>
           <button class="victory-choice" data-victory-weapon="cone" type="button">CONE</button>
+          <button class="victory-choice locked" data-victory-weapon="tech0" data-mercury-locked aria-disabled="true" type="button">TECH.0</button>
         </div>
         <div class="victory-loadout-row">
           <button class="victory-choice selected" data-victory-super="bomb" type="button">BOMB</button>
           <button class="victory-choice" data-victory-super="invincibility" type="button">SHIELD</button>
-          <button class="victory-choice" data-victory-super="lance" type="button">LANCE OF TECH</button>
+          <button class="victory-choice" data-victory-super="lance" type="button">TECHNOLOGY</button>
         </div>
       </div>
       <button id="victory-continue" type="button">CONTINUE</button>
@@ -145,6 +219,22 @@
     </div>
   </div>
 
-  <script src="main.js?v=16"></script>
+  <div class="mercury-defeat-screen" id="mercury-defeat-screen" aria-hidden="true">
+    <div class="defeat-card">
+      <div class="laughing-mercury" role="img" aria-label="Mercury laughing after defeating the player">
+        <span class="evil-brow evil-brow-left"></span>
+        <span class="evil-brow evil-brow-right"></span>
+        <span class="laugh-eye laugh-eye-left"></span>
+        <span class="laugh-eye laugh-eye-right"></span>
+        <span class="laugh-mouth"><i></i></span>
+      </div>
+      <div class="defeat-title">MERCURY WINS</div>
+      <blockquote>“I'm closest to the sun<br />but will ruin all your fun.”</blockquote>
+      <button id="defeat-retry" type="button">TRY AGAIN</button>
+      <button id="defeat-menu" class="ghost" type="button">MAIN MENU</button>
+    </div>
+  </div>
+
+  <script src="main.js?v=25"></script>
 </body>
 </html>
