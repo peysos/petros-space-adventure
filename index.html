@@ -18,8 +18,9 @@
       <h1 class="title">PETROS</h1>
       <p class="subtitle">SPACE ADVENTURE</p>
       <button class="start-btn" id="start-btn" type="button">START</button>
+      <button class="controls-btn" id="weapons-btn" type="button">WEAPONS</button>
       <button class="controls-btn" id="controls-btn" type="button">CONTROLS</button>
-      <input class="player-name-input" id="player-name" type="text" maxlength="14" placeholder="PLAYER NAME" autocomplete="off" />
+      <div class="color-selector"><span>SHIP COLOR</span><div class="color-options"><button class="color-choice cyan selected" data-color="#7ef9ff" aria-label="Cyan"></button><button class="color-choice red" data-color="#ff4f4f" aria-label="Red"></button><button class="color-choice green" data-color="#63ff91" aria-label="Green"></button><button class="color-choice yellow" data-color="#ffdc5a" aria-label="Yellow"></button><button class="color-choice pink" data-color="#ff72c8" aria-label="Pink"></button></div></div>
       <div class="admin-code"><input id="admin-code" type="text" placeholder="ADMIN CODE" autocomplete="off" /><button id="admin-submit" type="button">OK</button><small id="admin-status"></small></div>
     </div>
   </div>
@@ -34,6 +35,7 @@
       <p><span>ESC</span> Pause game</p>
     </div>
   </div>
+  <div class="controls-panel" id="weapons-panel" aria-hidden="true"><div class="weapons-card"><button class="controls-close" id="weapons-close" type="button">×</button><h2>WEAPONS</h2><div class="weapon-grid"><button class="weapon-tile selected" data-weapon="blaster"><span class="projectile-preview blaster-preview"></span><strong>BLASTER</strong><small>Default weapon</small></button><button class="weapon-tile" data-weapon="charge"><span class="projectile-preview charge-preview"></span><strong>CHARGE</strong><small>Hold arrow, then release<br>Max damage: 5</small></button><button class="weapon-tile" data-weapon="cone"><span class="projectile-preview cone-preview"><i></i><i></i><i></i></span><strong>CONE</strong><small>Three shots<br>Slower fire rate</small></button><button class="weapon-tile super-tile selected" data-super="bomb"><span class="projectile-preview bomb-preview"></span><strong>BOMB</strong><small>Large blast</small></button><button class="weapon-tile super-tile" data-super="invincibility"><span class="projectile-preview shield-preview"></span><strong>INVINCIBILITY</strong><small>5 seconds</small></button><button class="weapon-tile super-tile" data-super="void"><span class="projectile-preview void-preview"></span><strong>VOID</strong><small>Pulls enemies in</small></button></div></div></div>
 
   <div class="loading-screen hidden" id="loading-screen">
     <div class="loading-inner">
@@ -45,13 +47,17 @@
   <div class="game-ui" id="game-ui" aria-hidden="true">
     <div class="hud">
       <span>SCORE <strong id="score">000000</strong></span>
-      <span>HP <strong id="lives">3</strong></span>
+      <span>HP <strong id="lives">3</strong></span><span>WAVE <strong id="wave-number">1</strong></span>
     </div>
     <div class="boss-health" id="boss-health"><span>MERCURY</span><div class="boss-track"><div class="boss-fill" id="boss-fill"></div></div></div>
     <div class="super-meter"><span>SUPER</span><div class="super-track"><div class="super-fill" id="super-fill"></div></div></div>
     <div class="game-message" id="game-message"></div>
+    <div class="test-damage" id="test-damage"></div>
+    <div class="charge-meter" id="charge-meter"><span>CHARGE</span><div class="charge-track"><div class="charge-fill" id="charge-fill"></div></div></div>
+    <div class="charge-meter" id="charge-meter"><span>CHARGE</span><div class="charge-track"><div class="charge-fill" id="charge-fill"></div></div></div>
     <div class="wave-clear-message" id="wave-clear-message"></div>
     <button class="try-again-btn" id="try-again-btn" type="button">TRY AGAIN</button>
+    <button class="main-menu-btn" id="main-menu-btn" type="button">MAIN MENU</button>
   </div>
   <div class="damage-flash" id="damage-flash"></div>
   <div class="boss-intro" id="boss-intro"><div class="boss-intro-card"><div id="boss-player-name">PLAYER</div><div class="versus">VS</div><div class="mercury-name">MERCURY</div><button id="continue-boss" type="button">CONTINUE</button></div></div>
@@ -62,6 +68,19 @@
       <div class="victory-player" id="victory-player-name">PLAYER</div>
       <div class="victory-text">You defeated MERCURY!</div>
       <div class="victory-bonus">+1 HP</div>
+      <div class="victory-loadout" aria-label="Choose your loadout">
+        <div class="victory-loadout-label">CHOOSE LOADOUT</div>
+        <div class="victory-loadout-row">
+          <button class="victory-choice selected" data-victory-weapon="blaster" type="button">BLASTER</button>
+          <button class="victory-choice" data-victory-weapon="charge" type="button">CHARGE</button>
+          <button class="victory-choice" data-victory-weapon="cone" type="button">CONE</button>
+        </div>
+        <div class="victory-loadout-row">
+          <button class="victory-choice selected" data-victory-super="bomb" type="button">BOMB</button>
+          <button class="victory-choice" data-victory-super="invincibility" type="button">INVINCIBILITY</button>
+          <button class="victory-choice" data-victory-super="void" type="button">VOID</button>
+        </div>
+      </div>
       <button id="victory-continue" type="button">CONTINUE</button>
     </div>
   </div>

@@ -22,11 +22,20 @@ let gameActive = false;
 let gamePaused = false;
 let gameOverShown = false;
 let adminInvincible = false;
+let testMode = false;
+let testDamage = 0;
 let bossMode = false;
 let bossIntro = false;
 let playerName = "PLAYER";
+let playerColor = "#7ef9ff";
+let selectedWeapon = "blaster";
+let selectedSuper = "bomb";
+let chargeStartedAt = 0;
+let chargeDirection = { x: 0, y: -1 };
+let lastArrowDirection = { x: 0, y: -1 };
 let bossMusicTimer = null;
 let boss = { x: 0, y: 180, health: 75 };
+let bossShotTimer = 30;
 let bossDefeated = false;
 let bossAttackTimer = 0;
 let bossBullets = [];
@@ -39,6 +48,7 @@ let enemyBullets = [];
 let enemies = [];
 let fireCooldown = 0;
 let playerInvulnerable = 0;
+let invincibilitySuperTimer = 0;
 let enemyShotTimer = 60;
 let kills = 0;
 let superDamage = 0;
@@ -158,6 +168,9 @@ function draw(t) {
   if (!gameActive) drawStaticStars();
   if (gameOverShown) drawStars(t);
   if (gameActive && !gamePaused) drawGame();
+  updateChargeMeter();
+  const waveDisplay = document.getElementById("wave-number");
+  if (waveDisplay) waveDisplay.textContent = String(wave);
   requestAnimationFrame(draw);
 }
 
@@ -179,7 +192,6 @@ function createEnemies() {
 }
 
 function drawGame() {
-  if (playerInvulnerable > 0) playerInvulnerable--;
   const left = keys.KeyA;
   const right = keys.KeyD;
   const up = keys.KeyW;
@@ -188,8 +200,9 @@ function drawGame() {
   player.shrunk = Boolean(shrunk);
   const targetX = (right ? 1 : 0) - (left ? 1 : 0);
   const targetY = (down ? 1 : 0) - (up ? 1 : 0);
-  player.vx += (targetX * player.maxSpeed - player.vx) * player.speed;
-  player.vy += (targetY * player.maxSpeed - player.vy) * player.speed;
+  const movementSpeed = player.shrunk ? player.maxSpeed * 1.4 : player.maxSpeed;
+  player.vx += (targetX * movementSpeed - player.vx) * player.speed;
+  player.vy += (targetY * movementSpeed - player.vy) * player.speed;
   player.x += player.vx;
   player.y += player.vy;
   if (!targetX) player.vx *= 0.88;
@@ -200,17 +213,31 @@ function drawGame() {
   if ((player.y <= 28 && player.vy < 0) || (player.y >= H - 28 && player.vy > 0)) player.vy = 0;
 
   if (fireCooldown > 0) fireCooldown--;
+  const activeAimX = (keys.ArrowRight ? 1 : 0) - (keys.ArrowLeft ? 1 : 0);
+  const activeAimY = (keys.ArrowDown ? 1 : 0) - (keys.ArrowUp ? 1 : 0);
+  const aimX = activeAimX || lastArrowDirection.x;
+  const aimY = activeAimY || lastArrowDirection.y;
+  if (aimX || aimY) {
+    const aimLength = Math.hypot(aimX, aimY);
+    facing = { x: aimX / aimLength, y: aimY / aimLength };
+  }
   if (fireCooldown <= 0) {
-    const shootX = (keys.ArrowRight ? 1 : 0) - (keys.ArrowLeft ? 1 : 0);
-    const shootY = (keys.ArrowDown ? 1 : 0) - (keys.ArrowUp ? 1 : 0);
-    if (shootX || shootY) {
+    const shootX = (keys.ArrowRight || keys.ArrowLeft || keys.ArrowUp || keys.ArrowDown) ? aimX : 0;
+    const shootY = (keys.ArrowRight || keys.ArrowLeft || keys.ArrowUp || keys.ArrowDown) ? aimY : 0;
+    if (selectedWeapon === "cone" && (shootX || shootY)) {
+      fireCone(shootX, shootY);
+      fireCooldown = 18;
+    } else if (selectedWeapon === "blaster" && (shootX || shootY)) {
       fireInDirection(shootX, shootY);
       fireCooldown = 10;
     }
   }
 
   if (bossIntro) return;
+  if (playerInvulnerable > 0) playerInvulnerable--;
+  if (invincibilitySuperTimer > 0) invincibilitySuperTimer--;
   if (bossMode) { drawBossArea(); return; }
+  if (testMode) { drawTestRoom(); return; }
 
   for (const bomb of superBombs) {
     bomb.x += bomb.vx;
@@ -244,7 +271,8 @@ function drawGame() {
   ctx.save();
   ctx.translate(player.x, player.y);
   ctx.scale(shipScale, shipScale);
-  ctx.fillStyle = "#7ef9ff";
+  ctx.rotate(Math.atan2(facing.y, facing.x) + Math.PI / 2);
+  ctx.fillStyle = playerColor;
   ctx.beginPath();
   ctx.moveTo(0, -20);
   ctx.lineTo(-18, 16);
@@ -266,14 +294,19 @@ function drawGame() {
     ctx.stroke();
   }
 
-  ctx.fillStyle = "#ffdc5a";
   for (const bullet of bullets) {
     bullet.x += bullet.vx;
     bullet.y += bullet.vy;
     ctx.save();
     ctx.translate(bullet.x, bullet.y);
     ctx.rotate(Math.atan2(bullet.vy, bullet.vx) + Math.PI / 2);
-    ctx.fillRect(-2, -6, 4, 12);
+    if (bullet.type === "charge") {
+      ctx.fillStyle = "#ff8a32"; ctx.shadowColor = "#ff8a32"; ctx.shadowBlur = 12;
+      ctx.beginPath(); ctx.arc(0, 0, bullet.size, 0, Math.PI * 2); ctx.fill(); ctx.shadowBlur = 0;
+    } else if (bullet.type === "cone") {
+      ctx.fillStyle = "#63ff91";
+      ctx.beginPath(); ctx.moveTo(0, -7); ctx.lineTo(4, 0); ctx.lineTo(0, 7); ctx.lineTo(-4, 0); ctx.closePath(); ctx.fill();
+    } else { ctx.fillStyle = "#ffdc5a"; ctx.fillRect(-2, -6, 4, 12); }
     ctx.restore();
   }
   bullets = bullets.filter((b) => b.x > -20 && b.x < W + 20 && b.y > -20 && b.y < H + 20);
@@ -357,7 +390,7 @@ function drawGame() {
     for (const bullet of bullets) {
       if (Math.abs(bullet.x - enemy.x) < enemy.w && Math.abs(bullet.y - ey) < 20) {
         enemy.health -= bullet.damage || 1;
-        bullet.y = -100;
+        if (!bullet.piercing) bullet.y = -100;
         superDamage += bullet.damage || 1;
         if (enemy.health <= 0) {
           enemy.alive = false;
@@ -389,6 +422,7 @@ function enterBossArea() {
   bossIntro = true;
   bossDefeated = false;
   boss = { x: W / 2, y: 180, health: 75 };
+  bossShotTimer = 30;
   bossAttackTimer = 0;
   bossBullets = [];
   document.getElementById("boss-health").classList.add("visible");
@@ -428,7 +462,33 @@ function drawBossArea() {
   ctx.beginPath(); ctx.moveTo(boss.x + 35, boss.y - 12); ctx.lineTo(boss.x + 7, boss.y - 25); ctx.lineTo(boss.x + 5, boss.y - 15); ctx.lineTo(boss.x + 32, boss.y - 4); ctx.closePath(); ctx.fill();
   ctx.fillStyle = "#ff4f91"; ctx.beginPath(); ctx.arc(boss.x - 19, boss.y - 11, 5, 0, Math.PI * 2); ctx.arc(boss.x + 19, boss.y - 11, 5, 0, Math.PI * 2); ctx.fill();
   ctx.strokeStyle = "#191919"; ctx.lineWidth = 5; ctx.beginPath(); ctx.arc(boss.x, boss.y + 16, 22, Math.PI + 0.25, Math.PI * 2 - 0.25); ctx.stroke();
-  ctx.fillStyle = "#fff"; ctx.font = "700 18px Arial"; ctx.textAlign = "center"; ctx.fillText("MERCURY", boss.x, boss.y + 118);
+  bossShotTimer--;
+  if (bossShotTimer <= 0) {
+    const angle = Math.atan2(player.y - boss.y, player.x - boss.x);
+    enemyBullets.push({ x: boss.x, y: boss.y + 70, vx: Math.cos(angle) * 4.2, vy: Math.sin(angle) * 4.2, speed: 4.2, turnRate: 0.018 });
+    bossShotTimer = 28;
+  }
+  for (const bullet of enemyBullets) {
+    bullet.x += bullet.vx; bullet.y += bullet.vy;
+    ctx.save();
+    ctx.translate(bullet.x, bullet.y);
+    ctx.rotate(Math.atan2(bullet.vy, bullet.vx));
+    ctx.fillStyle = "#777";
+    ctx.beginPath();
+    ctx.moveTo(-8, -4); ctx.lineTo(-3, -9); ctx.lineTo(5, -7); ctx.lineTo(9, 0);
+    ctx.lineTo(4, 8); ctx.lineTo(-5, 7); ctx.lineTo(-9, 2); ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = "#aaa";
+    ctx.beginPath(); ctx.arc(-2, -3, 2, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+    if (!adminInvincible && playerInvulnerable === 0 && Math.abs(bullet.x - player.x) < 22 && Math.abs(bullet.y - player.y) < 24) {
+      lives--; playerInvulnerable = 90; flashDamage();
+      document.getElementById("lives").textContent = String(lives);
+      bullet.y = H + 100;
+      if (lives <= 0) { endGame(); return; }
+    }
+  }
+  enemyBullets = enemyBullets.filter((bullet) => bullet.y < H + 20);
   for (const bomb of superBombs) {
     bomb.x += bomb.vx; bomb.y += bomb.vy; bomb.life--;
     ctx.fillStyle = "#63f7ff"; ctx.shadowColor = "#63f7ff"; ctx.shadowBlur = 18;
@@ -507,16 +567,60 @@ function showVictory() {
   bossIntro = true;
   document.getElementById("boss-player-name").textContent = playerName;
   document.getElementById("victory-player-name").textContent = playerName;
+  document.querySelectorAll("[data-victory-weapon]").forEach((item) => item.classList.toggle("selected", item.dataset.victoryWeapon === selectedWeapon));
+  document.querySelectorAll("[data-victory-super]").forEach((item) => item.classList.toggle("selected", item.dataset.victorySuper === selectedSuper));
   document.getElementById("victory-screen").classList.add("visible");
   document.getElementById("victory-screen").setAttribute("aria-hidden", "false");
 }
 
+function drawTestRoom() {
+  ctx.fillStyle = "#07131a"; ctx.fillRect(0, 0, W, H);
+  for (const bomb of superBombs) {
+    bomb.x += bomb.vx; bomb.y += bomb.vy; bomb.life--;
+    ctx.fillStyle = "#63f7ff"; ctx.shadowColor = "#63f7ff"; ctx.shadowBlur = 16;
+    ctx.beginPath(); ctx.arc(bomb.x, bomb.y, 10, 0, Math.PI * 2); ctx.fill(); ctx.shadowBlur = 0;
+    if (Math.hypot(bomb.x - W / 2, bomb.y - 190) < 68 || bomb.life <= 0) { bomb.explode = true; testDamage += 15; }
+  }
+  superBombs = superBombs.filter((bomb) => !bomb.explode);
+  for (const bullet of bullets) {
+    bullet.x += bullet.vx; bullet.y += bullet.vy;
+    ctx.save(); ctx.translate(bullet.x, bullet.y); ctx.rotate(Math.atan2(bullet.vy, bullet.vx) + Math.PI / 2);
+    if (bullet.type === "charge") { ctx.fillStyle = "#ff8a32"; ctx.beginPath(); ctx.arc(0, 0, bullet.size, 0, Math.PI * 2); ctx.fill(); }
+    else if (bullet.type === "cone") { ctx.fillStyle = "#63ff91"; ctx.beginPath(); ctx.moveTo(0,-7); ctx.lineTo(4,0); ctx.lineTo(0,7); ctx.lineTo(-4,0); ctx.closePath(); ctx.fill(); }
+    else { ctx.fillStyle = "#ffdc5a"; ctx.fillRect(-2, -6, 4, 12); }
+    ctx.restore();
+    if (Math.hypot(bullet.x - W / 2, bullet.y - 190) < 58) { bullet.y = -100; testDamage += bullet.damage || 1; superDamage += bullet.damage || 1; updateSuperMeter(); }
+  }
+  bullets = bullets.filter((b) => b.y > -20 && b.y < H + 20 && b.x > -20 && b.x < W + 20);
+  ctx.fillStyle = "#777"; ctx.beginPath(); ctx.arc(W / 2, 190, 58, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = "#aaa"; ctx.beginPath(); ctx.arc(W / 2 - 18, 175, 9, 0, Math.PI * 2); ctx.arc(W / 2 + 20, 205, 7, 0, Math.PI * 2); ctx.fill();
+  document.getElementById("test-damage").textContent = `DAMAGE: ${testDamage}`;
+  updateChargeMeter();
+  drawPlayer();
+}
+
 function drawPlayer() {
-  ctx.fillStyle = "#7ef9ff"; ctx.beginPath(); ctx.moveTo(player.x, player.y - 20); ctx.lineTo(player.x - 18, player.y + 16); ctx.lineTo(player.x, player.y + 9); ctx.lineTo(player.x + 18, player.y + 16); ctx.closePath(); ctx.fill();
+  const scale = player.shrunk ? 0.55 : 1;
+  ctx.save(); ctx.translate(player.x, player.y); ctx.scale(scale, scale); ctx.rotate(Math.atan2(facing.y, facing.x) + Math.PI / 2);
+  ctx.fillStyle = playerColor; ctx.beginPath(); ctx.moveTo(0, -20); ctx.lineTo(-18, 16); ctx.lineTo(0, 9); ctx.lineTo(18, 16); ctx.closePath(); ctx.fill(); ctx.restore();
+  if (playerInvulnerable > 0) { ctx.strokeStyle = "rgba(255,255,255,.7)"; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(player.x, player.y, player.shrunk ? 24 : 34, 0, Math.PI * 2); ctx.stroke(); }
+  if (invincibilitySuperTimer > 0) {
+    const radius = player.shrunk ? 29 : 42;
+    const pulse = Math.sin(performance.now() * 0.012) * 2;
+    ctx.fillStyle = "rgba(255, 205, 45, .12)";
+    ctx.strokeStyle = "rgba(255, 215, 70, .95)";
+    ctx.lineWidth = 3;
+    ctx.shadowColor = "rgba(255, 190, 30, .85)";
+    ctx.shadowBlur = 16;
+    ctx.beginPath(); ctx.arc(player.x, player.y, radius + pulse, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.shadowBlur = 0;
+  }
 }
 
 function endGame() {
   gameActive = false;
+  playSound(90, 0.55, "sawtooth");
+  document.getElementById("test-damage").classList.remove("visible");
   bossIntro = false;
   if (bossMusicTimer) { clearInterval(bossMusicTimer); bossMusicTimer = null; }
   bossMode = false;
@@ -524,6 +628,7 @@ function endGame() {
   enemyBullets = [];
   document.getElementById("game-message").textContent = "GAME OVER";
   document.getElementById("try-again-btn").classList.add("visible");
+  document.getElementById("main-menu-btn").classList.add("visible");
 }
 
 function startGame() {
@@ -537,6 +642,7 @@ function startGame() {
     audioContext = null;
   }
   gameActive = true;
+  testDamage = 0;
   bossIntro = false;
   bossMode = false;
   bossDefeated = false;
@@ -555,8 +661,10 @@ function startGame() {
   superMeter = 0;
   lastSuperKills = 0;
   facing = { x: 0, y: -1 };
+  lastArrowDirection = { x: 0, y: -1 };
   fireCooldown = 0;
   playerInvulnerable = 0;
+  invincibilitySuperTimer = 0;
   enemyShotTimer = 60;
   player.x = W / 2;
   player.y = H - 80;
@@ -570,11 +678,13 @@ function startGame() {
   document.getElementById("wave-clear-message").textContent = "";
   document.getElementById("wave-clear-message").classList.remove("flash");
   document.getElementById("try-again-btn").classList.remove("visible");
+  document.getElementById("main-menu-btn").classList.remove("visible");
   document.getElementById("boss-health").classList.remove("visible");
+  document.getElementById("test-damage").classList.toggle("visible", testMode);
   document.getElementById("boss-intro").classList.remove("visible");
   document.getElementById("victory-screen").classList.remove("visible");
   document.getElementById("victory-screen").setAttribute("aria-hidden", "true");
-  playerName = document.getElementById("player-name").value.trim().toUpperCase() || "PLAYER";
+  playerName = "PLAYER";
   document.getElementById("score").textContent = "000000";
   document.getElementById("lives").textContent = "3";
   updateSuperMeter();
@@ -596,8 +706,19 @@ function showWaveCleared(number) {
 }
 
 function updateSuperMeter() {
-  superMeter = Math.min(1, (superDamage - lastSuperKills) / 20);
+  const requiredDamage = selectedSuper === "void" ? 40 : 20;
+  superMeter = Math.min(1, (superDamage - lastSuperKills) / requiredDamage);
   document.getElementById("super-fill").style.width = `${superMeter * 100}%`;
+}
+
+function setSelectedSuper(nextSuper) {
+  if (nextSuper !== selectedSuper && superMeter >= 1) {
+    const requiredDamage = nextSuper === "void" ? 40 : 20;
+    lastSuperKills = superDamage - requiredDamage * 0.5;
+  }
+  selectedSuper = nextSuper;
+  document.querySelectorAll("[data-super], [data-victory-super]").forEach((item) => item.classList.toggle("selected", item.dataset.super === nextSuper || item.dataset.victorySuper === nextSuper));
+  updateSuperMeter();
 }
 
 function playSound(frequency, duration, type) {
@@ -613,13 +734,35 @@ function playSound(frequency, duration, type) {
   oscillator.stop(audioContext.currentTime + duration);
 }
 
-function fireInDirection(dx, dy) {
+function fireInDirection(dx, dy, damage = player.shrunk ? 0.5 : 1, type = "basic", size = 3) {
   if (!gameActive || bullets.length >= 10) return;
   const length = Math.hypot(dx, dy) || 1;
   dx /= length;
   dy /= length;
   facing = { x: dx, y: dy };
-  bullets.push({ x: player.x, y: player.y, vx: dx * 10, vy: dy * 10, damage: 1 });
+  bullets.push({ x: player.x, y: player.y, vx: dx * 10, vy: dy * 10, damage, type, size, piercing: damage > 1, hitEnemies: new Set() });
+}
+
+function updateChargeMeter() {
+  const meter = document.getElementById("charge-meter");
+  const fill = document.getElementById("charge-fill");
+  const active = gameActive && selectedWeapon === "charge";
+  meter.classList.toggle("visible", active);
+  if (!active || !chargeStartedAt) { fill.style.width = "0%"; fill.style.background = "#63ff91"; return; }
+  const held = performance.now() - chargeStartedAt;
+  fill.style.width = `${Math.min(100, held / 2500 * 100)}%`;
+  fill.style.background = held < 850 ? "#63ff91" : held < 1700 ? "#ff9d32" : "#ff4747";
+}
+
+function fireCone(dx, dy) {
+  const length = Math.hypot(dx, dy) || 1; dx /= length; dy /= length;
+  const aim = { x: dx, y: dy };
+  const angles = [-0.16, 0, 0.16];
+  angles.forEach((offset) => {
+    const angle = Math.atan2(dy, dx) + offset;
+    fireInDirection(Math.cos(angle), Math.sin(angle), player.shrunk ? 0.5 : 1, "cone");
+  });
+  facing = aim;
 }
 
 function showLoading(callback) {
@@ -649,19 +792,20 @@ initStaticStars();
 requestAnimationFrame(draw);
 
 document.getElementById("start-btn").addEventListener("click", function () {
-  const nameInput = document.getElementById("player-name");
-  const trimmed = nameInput.value.trim();
-  if (!trimmed) {
-    nameInput.classList.add("invalid");
-    nameInput.focus();
-    nameInput.setAttribute("placeholder", "NAME REQUIRED");
-    return;
-  }
-  nameInput.classList.remove("invalid");
   showLoading(startGame);
 });
 document.getElementById("try-again-btn").addEventListener("click", function () {
   showLoading(startGame);
+});
+document.getElementById("main-menu-btn").addEventListener("click", function () {
+  gameActive = false;
+  bossMode = false;
+  bossIntro = false;
+  document.getElementById("game-ui").classList.remove("active");
+  document.getElementById("menu-wrap").classList.remove("hidden");
+  document.getElementById("game-message").textContent = "";
+  document.getElementById("try-again-btn").classList.remove("visible");
+  document.getElementById("main-menu-btn").classList.remove("visible");
 });
 document.getElementById("continue-boss").addEventListener("click", startBossFight);
 document.getElementById("victory-continue").addEventListener("click", function () {
@@ -683,6 +827,10 @@ document.getElementById("admin-submit").addEventListener("click", function () {
     adminInvincible = true;
     status.textContent = "INVINCIBILITY ENABLED";
     input.value = "";
+  } else if (input.value.trim().toUpperCase() === "TEST") {
+    testMode = true;
+    status.textContent = "TEST ROOM ENABLED";
+    input.value = "";
   } else {
     status.textContent = "INVALID CODE";
   }
@@ -692,19 +840,58 @@ document.getElementById("controls-btn").addEventListener("click", function () {
   panel.classList.add("visible");
   panel.setAttribute("aria-hidden", "false");
 });
+document.querySelectorAll(".color-choice").forEach((choice) => choice.addEventListener("click", function () {
+  playerColor = choice.dataset.color;
+  document.querySelectorAll(".color-choice").forEach((item) => item.classList.remove("selected"));
+  choice.classList.add("selected");
+}));
 document.getElementById("controls-close").addEventListener("click", function () {
   const panel = document.getElementById("controls-panel");
   panel.classList.remove("visible");
   panel.setAttribute("aria-hidden", "true");
 });
+document.getElementById("weapons-btn").addEventListener("click", function () {
+  const panel = document.getElementById("weapons-panel");
+  panel.classList.add("visible");
+  panel.setAttribute("aria-hidden", "false");
+});
+document.getElementById("weapons-close").addEventListener("click", function () {
+  const panel = document.getElementById("weapons-panel");
+  panel.classList.remove("visible");
+  panel.setAttribute("aria-hidden", "true");
+});
+document.querySelectorAll(".weapon-tile[data-weapon]").forEach((tile) => tile.addEventListener("click", function () {
+  selectedWeapon = tile.dataset.weapon;
+  document.querySelectorAll("[data-weapon], [data-victory-weapon]").forEach((item) => item.classList.toggle("selected", item.dataset.weapon === selectedWeapon || item.dataset.victoryWeapon === selectedWeapon));
+}));
+document.querySelectorAll(".weapon-tile[data-super]").forEach((tile) => tile.addEventListener("click", function () {
+  setSelectedSuper(tile.dataset.super);
+}));
+
+document.querySelectorAll("[data-victory-weapon]").forEach((tile) => tile.addEventListener("click", function () {
+  selectedWeapon = tile.dataset.victoryWeapon;
+  document.querySelectorAll("[data-weapon], [data-victory-weapon]").forEach((item) => item.classList.toggle("selected", item.dataset.weapon === selectedWeapon || item.dataset.victoryWeapon === selectedWeapon));
+}));
+document.querySelectorAll("[data-victory-super]").forEach((tile) => tile.addEventListener("click", function () {
+  setSelectedSuper(tile.dataset.victorySuper);
+}));
 
 window.addEventListener("keydown", function (e) {
   keys[e.code] = true;
+  const arrowDirections = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+  if (arrowDirections[e.code]) lastArrowDirection = { x: arrowDirections[e.code][0], y: arrowDirections[e.code][1] };
   if (gameActive && e.repeat === false) {
-    if (e.code === "ArrowLeft") fireInDirection(-1, 0);
-    if (e.code === "ArrowRight") fireInDirection(1, 0);
-    if (e.code === "ArrowUp") fireInDirection(0, -1);
-    if (e.code === "ArrowDown") fireInDirection(0, 1);
+    if (selectedWeapon === "charge" && e.code.startsWith("Arrow")) {
+      const chargeX = (keys.ArrowRight ? 1 : 0) - (keys.ArrowLeft ? 1 : 0);
+      const chargeY = (keys.ArrowDown ? 1 : 0) - (keys.ArrowUp ? 1 : 0);
+      chargeDirection = { x: chargeX || lastArrowDirection.x, y: chargeY || lastArrowDirection.y };
+      if (!chargeStartedAt) chargeStartedAt = performance.now();
+    }
+    if (selectedWeapon !== "charge" && e.code.startsWith("Arrow")) {
+      const shotX = (keys.ArrowRight ? 1 : 0) - (keys.ArrowLeft ? 1 : 0);
+      const shotY = (keys.ArrowDown ? 1 : 0) - (keys.ArrowUp ? 1 : 0);
+      if (shotX || shotY) fireInDirection(shotX, shotY);
+    }
   }
   if (gameActive && e.code === "Escape") {
     e.preventDefault();
@@ -722,11 +909,21 @@ window.addEventListener("keydown", function (e) {
 window.addEventListener("keyup", function (e) {
   keys[e.code] = false;
   if (e.code === "Space" && gameActive && performance.now() - spaceDownAt <= 180 && superMeter >= 1) {
+    if (selectedSuper === "invincibility") { playerInvulnerable = 300; invincibilitySuperTimer = 300; lastSuperKills = superDamage; superMeter = 0; updateSuperMeter(); return; }
+    if (selectedSuper === "void") { superBombs.push({ x: player.x, y: player.y, vx: facing.x * 8, vy: facing.y * 8, life: 75, explode: false, void: true }); lastSuperKills = superDamage; superMeter = 0; updateSuperMeter(); return; }
     superBombs.push({ x: player.x, y: player.y, vx: facing.x * 8, vy: facing.y * 8, life: 75, explode: false });
     playSound(180, 0.18, "triangle");
     lastSuperKills = superDamage;
     superMeter = 0;
     updateSuperMeter();
+  }
+  if (e.code.startsWith("Arrow") && selectedWeapon === "charge" && chargeStartedAt) {
+    const remainingArrow = keys.ArrowLeft || keys.ArrowRight || keys.ArrowUp || keys.ArrowDown;
+    if (remainingArrow) { chargeDirection = { ...lastArrowDirection }; return; }
+    const damage = Math.min(5, Math.max(1, Math.ceil((performance.now() - chargeStartedAt) / 500)));
+    const size = Math.min(9, 3 + Math.floor((performance.now() - chargeStartedAt) / 350));
+    fireInDirection(chargeDirection.x, chargeDirection.y, damage, "charge", size);
+    chargeStartedAt = 0;
   }
 });
 window.addEventListener("blur", function () {
