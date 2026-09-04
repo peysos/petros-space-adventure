@@ -29,6 +29,11 @@
       <button class="start-btn" id="start-btn" type="button">START</button>
       <button class="controls-btn" id="weapons-btn" type="button">WEAPONS<small id="loadout-readout">BLASTER + BOMB</small></button>
       <button class="controls-btn link-btn" id="controls-btn" type="button">CONTROLS</button>
+      <section class="audio-controls menu-audio" aria-label="Audio settings">
+        <div class="audio-heading"><span>AUDIO</span><button class="audio-mute" data-audio-mute type="button" aria-pressed="false">SOUND ON</button></div>
+        <label class="audio-row"><span>MUSIC</span><input data-audio-control="music" type="range" min="0" max="100" step="5" value="100" /><output data-audio-output="music">100%</output></label>
+        <label class="audio-row"><span>GAME SFX</span><input data-audio-control="sfx" type="range" min="0" max="100" step="5" value="90" /><output data-audio-output="sfx">90%</output></label>
+      </section>
       <div class="color-selector"><span>SHIP COLOR</span><div class="color-options"><button class="color-choice cyan selected" data-color="#7ef9ff" aria-label="Cyan"></button><button class="color-choice red" data-color="#ff4f4f" aria-label="Red"></button><button class="color-choice green" data-color="#63ff91" aria-label="Green"></button><button class="color-choice yellow" data-color="#ffdc5a" aria-label="Yellow"></button><button class="color-choice pink" data-color="#ff72c8" aria-label="Pink"></button></div></div>
       <div class="admin-code"><input id="admin-code" type="text" placeholder="ADMIN CODE" autocomplete="off" /><button id="admin-submit" type="button">OK</button><small id="admin-status"></small></div>
     </div>
@@ -63,7 +68,7 @@
         <div class="weapon-grid">
           <button class="weapon-tile super-tile selected" data-super="bomb"><span class="tile-badge">EQUIPPED</span><span class="projectile-preview bomb-preview"></span><strong>BOMB</strong><small>Large blast</small></button>
           <button class="weapon-tile super-tile" data-super="invincibility"><span class="tile-badge">EQUIPPED</span><span class="projectile-preview shield-preview"></span><strong>SHIELD</strong><small>5 seconds of<br>invincibility</small></button>
-          <button class="weapon-tile super-tile" data-super="lance"><span class="tile-badge">EQUIPPED</span><span class="projectile-preview lance-preview"><i></i></span><strong>LANCE</strong><small>Piercing beam<br>Burns everything in line</small></button>
+          <button class="weapon-tile super-tile" data-super="lance"><span class="tile-badge">EQUIPPED</span><span class="projectile-preview lance-preview"><i></i></span><strong>LANCE OF TECH</strong><small>Piercing beam<br>Burns everything in line</small></button>
         </div>
       </section>
       <p class="loadout-summary">LOADOUT <strong id="loadout-summary-text">BLASTER + BOMB</strong></p>
@@ -97,6 +102,11 @@
   <div class="pause-screen" id="pause-screen" aria-hidden="true">
     <div class="pause-card">
       <h2>PAUSED</h2>
+      <section class="audio-controls pause-audio" aria-label="Audio settings">
+        <div class="audio-heading"><span>AUDIO</span><button class="audio-mute" data-audio-mute type="button" aria-pressed="false">SOUND ON</button></div>
+        <label class="audio-row"><span>MUSIC</span><input data-audio-control="music" type="range" min="0" max="100" step="5" value="100" /><output data-audio-output="music">100%</output></label>
+        <label class="audio-row"><span>GAME SFX</span><input data-audio-control="sfx" type="range" min="0" max="100" step="5" value="90" /><output data-audio-output="sfx">90%</output></label>
+      </section>
       <button id="resume-btn" type="button">RESUME</button>
       <button id="pause-menu-btn" class="ghost" type="button">MAIN MENU</button>
       <p class="key-hint">PRESS <span>ESC</span> TO RESUME</p>
@@ -127,7 +137,7 @@
         <div class="victory-loadout-row">
           <button class="victory-choice selected" data-victory-super="bomb" type="button">BOMB</button>
           <button class="victory-choice" data-victory-super="invincibility" type="button">SHIELD</button>
-          <button class="victory-choice" data-victory-super="lance" type="button">LANCE</button>
+          <button class="victory-choice" data-victory-super="lance" type="button">LANCE OF TECH</button>
         </div>
       </div>
       <button id="victory-continue" type="button">CONTINUE</button>
@@ -135,6 +145,6 @@
     </div>
   </div>
 
-  <script src="main.js?v=15"></script>
+  <script src="main.js?v=16"></script>
 </body>
 </html>

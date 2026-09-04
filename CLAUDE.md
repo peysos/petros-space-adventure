@@ -113,9 +113,10 @@ debris swarm that orbits on per-shard inclinations, drawn behind and in front of
 The face tracks the ship — pupils follow the player, the body leans toward them, and it blinks
 on its own timer.
 
-It also **moves**: `bossDrift` sweeps it across the arena with a bias toward the player, and
-`bossBurstTimer` fires a slow ten-way radial burst roughly every 8 seconds. Both exist to deny
-static safe spots without raising the difficulty much — it's the first boss.
+It also **moves**: `bossDrift` sweeps it across the arena with a light bias toward the player,
+and `bossBurstTimer` fires a slow eight-way radial burst roughly every 9 seconds. Its homing
+meteor tracks for a shorter window, while the three-way spread has a longer telegraph and
+recovery. These patterns deny static safe spots without making the first boss overly punishing.
 
 ### Mercury's animation states
 
@@ -164,14 +165,18 @@ leaves a flame trail.
 Super (`selectedSuper`), fired by a **short** Space tap when `superMeter >= 1`:
 - `bomb` — projectile with a 125px blast radius (15 damage to the boss).
 - `invincibility` ("SHIELD") — 300 frames of `playerInvulnerable` + `invincibilitySuperTimer`.
-- `lance` — a piercing beam locked to the direction fired but anchored to the ship, so it
+- `lance` ("LANCE OF TECH") — a piercing beam locked to the direction fired but anchored to the ship, so it
   sweeps as you move. Lives `BEAM_FRAMES`, damages everything within `BEAM_HALF_WIDTH` of its
   centre line every `BEAM_TICK` frames. Replaced the old `void` super, which was never
   implemented — it spawned a bomb flagged `void: true` that nothing read.
 
 Meter math is in `updateSuperMeter()`: `(superDamage - lastSuperKills) / requiredDamage`,
-with costs in `SUPER_COST` (20, 20, 30 for lance). `setSelectedSuper()` refunds half on a
+with costs in `SUPER_COST` (22, 22, 33 for Lance of Tech). `setSelectedSuper()` refunds half on a
 mid-game swap.
+
+When the meter is full, `drawSuperReadyAura()` adds a large pulsing, orbiting glow around the
+ship in `playerColor`. The super HUD and every player weapon/super effect use the same theme
+colour, so changing the ship keeps the whole loadout visually coherent.
 
 ## Input
 
@@ -185,6 +190,9 @@ mid-game swap.
 - `Space` **tap** (≤180ms) — fire super. The hold/tap split is `spaceDownAt` vs `performance.now()`.
 - `Esc` — pause.
 - `blur` — clears all keys so the ship doesn't drift when the tab loses focus.
+- Outside active gameplay, arrow keys move focus spatially through the menu, audio controls,
+  loadout grids, pause screen and victory choices. Enter/Space activates the focused control;
+  Escape closes the controls or weapons panel and resumes from pause.
 
 ## Admin codes
 
@@ -209,6 +217,9 @@ Typed into the ADMIN CODE box on the menu (`admin-submit` handler):
 - **Pause.** Escape calls `setPaused()`, which shows `#pause-screen` (RESUME / MAIN MENU) and
   ducks the music. `returnToMenu()` is the single teardown path shared by the pause card and the
   game-over button.
+- **Audio controls.** The menu and pause card both expose synchronized Music and Game SFX
+  sliders plus a global mute toggle. Preferences are stored under `petros-space-adventure-audio`
+  in `localStorage` and applied to the WebAudio buses without restarting the active track.
 
 ## Music
 
@@ -218,7 +229,8 @@ audibly. Four tracks (`menu`, `battle`, `boss`, `victory`) are 16-step patterns 
 numbers, played through synthesised voices: filtered saw/square bass with a sub, plucked arp,
 doubled lead, and noise-based kick/snare/hat. `victory` is `once: true` and stops itself.
 
-Everything routes through `musicGain` / `sfxGain` off one `ensureAudio()` context. Browsers
+Everything routes through `musicGain` / `sfxGain` and then `masterGain` off one
+`ensureAudio()` context. Browsers
 block audio before a gesture, so `unlockAudio()` waits for the first click or keypress and then
 brings the menu track in.
 
@@ -259,6 +271,7 @@ menu button and panel footer. Nothing else touches the `.selected` class; go thr
 - Don't clear to black before something that repaints every pixel anyway — `draw()` skips the
   clear when `drawBossArea`/`drawTestRoom` is about to fill the screen. A redundant
   full-screen fill is the most expensive kind of no-op there is.
-- Colors are hardcoded hex literals per entity (player `playerColor`, enemies `#c77dff`,
-  blaster `#ffdc5a`, cone `#63ff91`, charge `#ff8a32`, bombs `#63f7ff`).
+- Enemy and boss colours remain fixed for readability. Every player-owned projectile, charge
+  effect, super, loadout preview and HUD accent instead reads from `playerColor` / the CSS
+  `--theme` tokens.
 - After editing `main.js`, bump the `?v=` in `index.html`'s script tag.
