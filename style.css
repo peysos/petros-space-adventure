@@ -1,14 +1,17 @@
 /* ============================================================
    Petros Space Adventure — retro arcade cabinet theme
 
-   --theme / --theme-rgb are rewritten by main.js whenever the
-   player picks a ship colour, so the whole front end re-skins
-   to match the ship. Everything accent-coloured reads from them.
+   --theme / --theme-rgb follow the player's ship. Weapon and super
+   tokens stay tied to the selected loadout so attacks remain distinct.
    ============================================================ */
 
 :root {
   --theme: #7ef9ff;
   --theme-rgb: 126, 249, 255;
+  --weapon-color: #63f7ff;
+  --weapon-rgb: 99, 247, 255;
+  --super-color: #ff4f4f;
+  --super-rgb: 255, 79, 79;
   --ink: #0a0a0f;
   --red: #ff1a1a;
   --amber: #ffdc5a;
@@ -403,10 +406,16 @@ button:focus-visible, input:focus-visible {
 .weapon-tile.selected .projectile-preview { opacity: 1; transform: scale(1.08); }
 .weapon-tile.selected small { color: #a9a9bd; }
 
-.weapon-tile[data-weapon], .weapon-tile[data-super] { border-color: rgba(var(--theme-rgb), 0.24); }
-.weapon-tile[data-weapon]:hover, .weapon-tile[data-super]:hover { border-color: rgba(var(--theme-rgb), 0.68); box-shadow: 0 0 16px rgba(var(--theme-rgb), 0.24); }
-.weapon-tile[data-weapon].selected, .weapon-tile[data-super].selected { border-color: var(--theme); background: linear-gradient(160deg, rgba(var(--theme-rgb), 0.2), #101019 70%); box-shadow: 0 0 0 2px #08080f, 0 0 26px rgba(var(--theme-rgb), 0.58), inset 0 0 22px rgba(var(--theme-rgb), 0.18); }
-.weapon-tile[data-weapon].selected .tile-badge, .weapon-tile[data-super].selected .tile-badge { background: var(--theme); }
+.weapon-tile[data-weapon="blaster"], .victory-choice[data-victory-weapon="blaster"] { --loadout-color: #63f7ff; --loadout-rgb: 99, 247, 255; }
+.weapon-tile[data-weapon="charge"], .victory-choice[data-victory-weapon="charge"] { --loadout-color: #ffb43d; --loadout-rgb: 255, 180, 61; }
+.weapon-tile[data-weapon="cone"], .victory-choice[data-victory-weapon="cone"] { --loadout-color: #ff72c8; --loadout-rgb: 255, 114, 200; }
+.weapon-tile[data-super="bomb"], .victory-choice[data-victory-super="bomb"] { --loadout-color: #ff4f4f; --loadout-rgb: 255, 79, 79; }
+.weapon-tile[data-super="invincibility"], .victory-choice[data-victory-super="invincibility"] { --loadout-color: #63ff91; --loadout-rgb: 99, 255, 145; }
+.weapon-tile[data-super="lance"], .victory-choice[data-victory-super="lance"] { --loadout-color: #9d7bff; --loadout-rgb: 157, 123, 255; }
+.weapon-tile[data-weapon], .weapon-tile[data-super] { border-color: rgba(var(--loadout-rgb), 0.28); }
+.weapon-tile[data-weapon]:hover, .weapon-tile[data-super]:hover { color: var(--loadout-color); border-color: rgba(var(--loadout-rgb), 0.72); box-shadow: 0 0 16px rgba(var(--loadout-rgb), 0.28); }
+.weapon-tile[data-weapon].selected, .weapon-tile[data-super].selected { color: #fff; border-color: var(--loadout-color); background: linear-gradient(160deg, rgba(var(--loadout-rgb), 0.2), #101019 70%); box-shadow: 0 0 0 2px #08080f, 0 0 26px rgba(var(--loadout-rgb), 0.58), inset 0 0 22px rgba(var(--loadout-rgb), 0.18); }
+.weapon-tile[data-weapon].selected .tile-badge, .weapon-tile[data-super].selected .tile-badge { background: var(--loadout-color); }
 
 .loadout-summary { margin-top: 4px; color: var(--dim); font-family: var(--pixel); font-size: 0.55rem; letter-spacing: 3px; }
 .loadout-summary strong { color: var(--theme); font-weight: 400; text-shadow: 0 0 12px rgba(var(--theme-rgb), 0.5); }
@@ -414,17 +423,17 @@ button:focus-visible, input:focus-visible {
 /* --- Projectile previews ----------------------------------- */
 .projectile-preview { position: relative; display: block; width: 58px; height: 48px; margin-bottom: 2px; }
 .projectile-preview::after, .projectile-preview::before, .projectile-preview i { content: ""; position: absolute; display: block; }
-.blaster-preview::after { width: 7px; height: 30px; left: 26px; top: 8px; border-radius: 5px; background: var(--theme); box-shadow: 0 0 12px var(--theme); }
-.charge-preview::after { width: 23px; height: 23px; left: 18px; top: 13px; border-radius: 50%; background: radial-gradient(circle at 40% 35%, #fff, var(--theme) 58%, rgba(var(--theme-rgb), .35)); box-shadow: 0 0 18px var(--theme); }
-.cone-preview i { width: 9px; height: 20px; top: 14px; border-radius: 4px; background: var(--theme); box-shadow: 0 0 8px var(--theme); }
+.blaster-preview::after { width: 7px; height: 30px; left: 26px; top: 8px; border-radius: 5px; background: var(--loadout-color); box-shadow: 0 0 12px var(--loadout-color); }
+.charge-preview::after { width: 23px; height: 23px; left: 18px; top: 13px; border-radius: 50%; background: radial-gradient(circle at 40% 35%, #fff, var(--loadout-color) 58%, rgba(var(--loadout-rgb), .35)); box-shadow: 0 0 18px var(--loadout-color); }
+.cone-preview i { width: 9px; height: 20px; top: 14px; border-radius: 4px; background: var(--loadout-color); box-shadow: 0 0 8px var(--loadout-color); }
 .cone-preview i:nth-child(1) { left: 10px; transform: rotate(-28deg); }
 .cone-preview i:nth-child(2) { left: 25px; }
 .cone-preview i:nth-child(3) { left: 40px; transform: rotate(28deg); }
-.bomb-preview::after { width: 27px; height: 27px; left: 16px; top: 10px; border-radius: 50%; background: var(--theme); box-shadow: 0 0 18px var(--theme); }
-.shield-preview::after { width: 40px; height: 44px; left: 9px; top: 2px; background: linear-gradient(145deg, #fff 0 8%, var(--theme) 32%, rgba(var(--theme-rgb), .42)); clip-path: polygon(50% 0, 94% 16%, 84% 70%, 50% 100%, 16% 70%, 6% 16%); filter: drop-shadow(0 0 9px var(--theme)); }
+.bomb-preview::after { width: 27px; height: 27px; left: 16px; top: 10px; border-radius: 50%; background: var(--loadout-color); box-shadow: 0 0 18px var(--loadout-color); }
+.shield-preview::after { width: 40px; height: 44px; left: 9px; top: 2px; background: linear-gradient(145deg, #fff 0 8%, var(--loadout-color) 32%, rgba(var(--loadout-rgb), .42)); clip-path: polygon(50% 0, 94% 16%, 84% 70%, 50% 100%, 16% 70%, 6% 16%); filter: drop-shadow(0 0 9px var(--loadout-color)); }
 .shield-preview::before { z-index: 1; width: 20px; height: 20px; left: 19px; top: 13px; background: linear-gradient(#fff, #fff) center/5px 20px no-repeat, linear-gradient(#fff, #fff) center/20px 5px no-repeat; filter: drop-shadow(0 0 4px rgba(0, 0, 0, .65)); }
-.lance-preview::after { width: 8px; height: 42px; left: 25px; top: 3px; background: linear-gradient(#fff, var(--theme) 52%, rgba(var(--theme-rgb), .5)); box-shadow: 0 0 10px #fff, 0 0 22px var(--theme), 0 0 34px rgba(var(--theme-rgb), .6); }
-.lance-preview i { width: 22px; height: 22px; left: 18px; top: 13px; border-radius: 50%; background: rgba(var(--theme-rgb), .35); filter: blur(3px); }
+.lance-preview::after { width: 8px; height: 42px; left: 25px; top: 3px; background: linear-gradient(#fff, var(--loadout-color) 52%, rgba(var(--loadout-rgb), .5)); box-shadow: 0 0 10px #fff, 0 0 22px var(--loadout-color), 0 0 34px rgba(var(--loadout-rgb), .6); }
+.lance-preview i { width: 22px; height: 22px; left: 18px; top: 13px; border-radius: 50%; background: rgba(var(--loadout-rgb), .35); filter: blur(3px); }
 
 /* --- Loading ------------------------------------------------ */
 .loading-screen { position: fixed; inset: 0; z-index: 10; background: #000; display: flex; align-items: center; justify-content: center; }
@@ -503,18 +512,18 @@ button:focus-visible, input:focus-visible {
   100% { opacity: 0; transform: scale(1.06); }
 }
 
-.super-meter { position: absolute; left: 28px; bottom: 24px; color: var(--theme); font-size: 0.55rem; text-shadow: 0 0 8px var(--theme); }
-.super-track { width: 190px; height: 12px; margin-top: 8px; border: 2px solid var(--theme); background: rgba(255, 255, 255, 0.06); }
-.super-fill { width: 0%; height: 100%; background: repeating-linear-gradient(90deg, var(--theme) 0 6px, rgba(var(--theme-rgb), .34) 6px 9px); box-shadow: 0 0 12px var(--theme); transition: width 0.2s steps(6); }
+.super-meter { position: absolute; left: 28px; bottom: 24px; color: var(--super-color); font-size: 0.55rem; text-shadow: 0 0 8px var(--super-color); }
+.super-track { width: 190px; height: 12px; margin-top: 8px; border: 2px solid var(--super-color); background: rgba(255, 255, 255, 0.06); }
+.super-fill { width: 0%; height: 100%; background: repeating-linear-gradient(90deg, var(--super-color) 0 6px, rgba(var(--super-rgb), .34) 6px 9px); box-shadow: 0 0 12px var(--super-color); transition: width 0.2s steps(6); }
 .super-meter.ready .super-track { animation: superReady 0.8s steps(1) infinite; }
-@keyframes superReady { 0%, 100% { box-shadow: 0 0 0 rgba(var(--theme-rgb), 0); } 50% { box-shadow: 0 0 22px rgba(var(--theme-rgb), 0.9); } }
+@keyframes superReady { 0%, 100% { box-shadow: 0 0 0 rgba(var(--super-rgb), 0); } 50% { box-shadow: 0 0 22px rgba(var(--super-rgb), 0.9); } }
 
-.charge-meter { display: none; position: absolute; right: 28px; bottom: 24px; color: var(--theme); font-size: 0.55rem; text-align: right; }
+.charge-meter { display: none; position: absolute; right: 28px; bottom: 24px; color: var(--weapon-color); font-size: 0.55rem; text-align: right; }
 .charge-meter.visible { display: block; }
 .charge-track { width: 190px; height: 12px; margin-top: 8px; border: 2px solid #55556e; }
 .charge-fill { width: 0%; height: 100%; background: var(--green); transition: width .08s linear, background .15s ease; }
-.charge-meter.full { color: var(--theme); text-shadow: 0 0 14px var(--theme); }
-.charge-meter.full .charge-track { border-color: var(--theme); box-shadow: 0 0 18px rgba(var(--theme-rgb), 0.7); }
+.charge-meter.full { color: var(--weapon-color); text-shadow: 0 0 14px var(--weapon-color); }
+.charge-meter.full .charge-track { border-color: var(--weapon-color); box-shadow: 0 0 18px rgba(var(--weapon-rgb), 0.7); }
 
 .boss-health { display: none; position: absolute; top: 72px; left: 50%; width: min(460px, 70vw); transform: translateX(-50%); color: #c8c8cf; font-size: 0.62rem; letter-spacing: 5px; text-align: center; text-shadow: 0 0 12px rgba(200, 200, 210, 0.72); }
 .boss-health.visible { display: block; }
@@ -620,9 +629,6 @@ button:focus-visible, input:focus-visible {
 .dead-eye { position: absolute; z-index: 2; top: 28px; color: #1d1d22; font-family: var(--pixel); font-size: 1.35rem; line-height: 1; text-shadow: 1px 1px 0 #e4e4e8; }
 .dead-eye-left { left: 18px; }
 .dead-eye-right { right: 18px; }
-.dead-brow { position: absolute; z-index: 3; top: 20px; width: 27px; height: 7px; border-radius: 5px; background: #25252a; box-shadow: 0 2px 0 rgba(232, 232, 238, .28); }
-.dead-brow-left { left: 13px; transform: rotate(13deg); }
-.dead-brow-right { right: 13px; transform: rotate(-13deg); }
 .dead-mouth { position: absolute; z-index: 2; left: 31px; top: 65px; width: 42px; height: 19px; border-radius: 48%; background: #29272b; box-shadow: inset 0 4px 0 #111115; }
 .dead-tongue { position: absolute; z-index: 3; left: 43px; top: 74px; width: 24px; height: 25px; border-radius: 5px 5px 13px 13px; background: #ba667a; border: 2px solid #442832; transform: rotate(7deg); }
 .dead-tongue::after { content: ""; position: absolute; left: 10px; top: 5px; width: 2px; height: 13px; background: rgba(92, 38, 53, .5); }
@@ -646,10 +652,35 @@ button:focus-visible, input:focus-visible {
 .victory-loadout-row { display: flex; gap: 8px; justify-content: center; margin: 10px 0; }
 .victory-choice { flex: 1; min-height: 44px; padding: 8px 6px; border: 2px solid #33334a; color: #7c7c93; background: #101016; font-family: var(--pixel); font-size: .48rem; cursor: pointer; transition: color .12s ease, border-color .12s ease, box-shadow .15s ease, background .15s ease; }
 .victory-choice:hover { color: #fff; border-color: #6f6f8c; }
-.victory-choice[data-victory-weapon].selected, .victory-choice[data-victory-super].selected { color: #06070a; background: var(--theme); border-color: var(--theme); box-shadow: 0 0 18px rgba(var(--theme-rgb), .5); }
+.victory-choice[data-victory-weapon], .victory-choice[data-victory-super] { border-color: rgba(var(--loadout-rgb), .3); }
+.victory-choice[data-victory-weapon]:hover, .victory-choice[data-victory-super]:hover { color: var(--loadout-color); border-color: var(--loadout-color); }
+.victory-choice[data-victory-weapon].selected, .victory-choice[data-victory-super].selected { color: #06070a; background: var(--loadout-color); border-color: var(--loadout-color); box-shadow: 0 0 18px rgba(var(--loadout-rgb), .5); }
 
 .victory-card > button { margin-top: 30px; padding: 16px 40px; color: #05060a; background: var(--theme); border: 3px solid var(--theme); font-family: var(--pixel); font-size: 0.72rem; letter-spacing: 3px; cursor: pointer; box-shadow: 0 0 28px rgba(var(--theme-rgb), .45); transition: transform 0.08s steps(2), filter .15s ease; }
 .victory-card > button:hover { transform: translate(3px, 3px); filter: brightness(1.15); }
+
+/* --- Mercury defeat ---------------------------------------- */
+.mercury-defeat-screen { display: none; position: fixed; inset: 0; z-index: 17; align-items: center; justify-content: center; overflow: hidden; background: radial-gradient(ellipse at 50% 35%, #3a1821 0%, #13080c 52%, #020102 100%); color: #fff; text-align: center; }
+.mercury-defeat-screen.visible { display: flex; }
+.defeat-card { width: min(560px, 90vw); padding: 34px 28px; font-family: var(--pixel); }
+.laughing-mercury { position: relative; width: 126px; height: 126px; margin: 0 auto 26px; border: 4px solid #e4e4e8; border-radius: 50%; background: radial-gradient(circle at 35% 28%, #f0f0f2 0 8%, #b9b9c0 30%, #77777f 72%, #37373d 100%); box-shadow: inset -17px -14px 20px rgba(0, 0, 0, .34), 0 0 34px rgba(255, 79, 91, .32); animation: mercuryLaugh .46s ease-in-out infinite alternate; }
+.laughing-mercury::before, .laughing-mercury::after { content: ""; position: absolute; border-radius: 50%; background: rgba(45, 45, 50, .24); box-shadow: inset 2px 2px 3px rgba(0, 0, 0, .24); }
+.laughing-mercury::before { width: 20px; height: 15px; left: 17px; top: 18px; }
+.laughing-mercury::after { width: 15px; height: 12px; right: 15px; bottom: 25px; }
+.laugh-eye { position: absolute; z-index: 2; top: 39px; width: 27px; height: 15px; border-top: 6px solid #202026; border-radius: 50%; }
+.laugh-eye-left { left: 22px; transform: rotate(7deg); }
+.laugh-eye-right { right: 22px; transform: rotate(-7deg); }
+.laugh-mouth { position: absolute; z-index: 2; left: 35px; top: 68px; width: 56px; height: 38px; overflow: hidden; border: 4px solid #202026; border-radius: 10px 10px 48% 48%; background: #1a1115; animation: laughMouth .46s ease-in-out infinite alternate; }
+.laugh-mouth::before { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 11px; background: #f4f1e9; border-bottom: 3px solid #202026; }
+.laugh-mouth i { position: absolute; left: 12px; bottom: -2px; width: 30px; height: 15px; border-radius: 50% 50% 4px 4px; background: #c86880; }
+@keyframes mercuryLaugh { from { transform: translateY(0) rotate(-2deg); } to { transform: translateY(-8px) rotate(2deg); } }
+@keyframes laughMouth { from { transform: scaleY(.86); } to { transform: scaleY(1.08); } }
+.defeat-title { color: #ff5b69; font-size: clamp(1.25rem, 4.8vw, 2.5rem); letter-spacing: 6px; text-shadow: 4px 4px 0 #4b1118, 0 0 24px rgba(255, 79, 91, .7); }
+.defeat-card blockquote { margin: 26px auto 30px; color: #d5d5db; font-family: "Segoe UI", Arial, sans-serif; font-size: clamp(1rem, 2.6vw, 1.35rem); font-style: italic; line-height: 1.65; }
+.defeat-card button { display: block; width: min(280px, 80vw); margin: 12px auto 0; padding: 15px 22px; color: #100306; background: #ff5b69; border: 3px solid #ff5b69; font-family: var(--pixel); font-size: .62rem; letter-spacing: 3px; cursor: pointer; }
+.defeat-card button:hover { transform: translate(2px, 2px); filter: brightness(1.14); }
+.defeat-card button.ghost { color: #d7d7de; background: transparent; border-color: #5f4a50; }
+.defeat-card button.ghost:hover { color: #fff; border-color: #fff; }
 
 @media (max-height: 820px) {
   .title-block { padding-top: 18px; padding-bottom: 20px; }

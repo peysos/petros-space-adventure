@@ -7,7 +7,7 @@ no package manager — plain HTML + CSS + a single `<canvas>` game loop in vanil
 
 | File | Role |
 | --- | --- |
-| `index.html` | All DOM: menu, weapons/controls/change-log modals, loading screen, HUD, boss intro, victory screen. Loads the CSS and `main.js` with versioned query strings (bump changed assets to bust cache). |
+| `index.html` | All DOM: menu, weapons/controls/change-log modals, loading screen, HUD, boss intro, victory/defeat screens. Loads the CSS and `main.js` with versioned query strings (bump changed assets to bust cache). |
 | `main.js` | The entire game: state, render loop, physics, collisions, input, music/SFX synthesis, UI wiring. |
 | `style.css` | Retro arcade-cabinet theme: CRT scanline overlay, pixel type, hard-edged chunky controls. Uses Bangers (title) and Press Start 2P (everything else) from Google Fonts. |
 | `favicon.svg` | Inline red "P" mark. |
@@ -165,20 +165,21 @@ Below full charge, `drawChargeAura()` shows a contracting ring. At full charge t
 and `drawPlayer()` applies only a subtle hull shake; the full-power round keeps its flame trail.
 
 Super (`selectedSuper`), fired by a **short** Space tap when `superMeter >= 1`:
-- `bomb` — projectile with a 125px blast radius (15 damage to the boss).
-- `invincibility` ("SHIELD") — 300 frames of `playerInvulnerable` + `invincibilitySuperTimer`.
-- `lance` ("LANCE OF TECH") — a piercing beam locked to the direction fired but anchored to the ship, so it
+- `bomb` — projectile with a 125px blast radius (15 damage to the boss). `bombBlasts` keeps its
+  layered shockwaves, spokes, hot core and debris alive after the projectile is consumed.
+- `invincibility` ("SHIELD") — 180 frames of `playerInvulnerable` + `invincibilitySuperTimer`.
+- `lance` ("TECHNOLOGY") — a piercing beam locked to the direction fired but anchored to the ship, so it
   sweeps as you move. Lives `BEAM_FRAMES`, damages everything within `BEAM_HALF_WIDTH` of its
   centre line every `BEAM_TICK` frames. Replaced the old `void` super, which was never
   implemented — it spawned a bomb flagged `void: true` that nothing read.
 
 Meter math is in `updateSuperMeter()`: `(superDamage - lastSuperKills) / requiredDamage`,
-with costs in `SUPER_COST` (22, 22, 33 for Lance of Tech). `setSelectedSuper()` refunds half on a
+with costs in `SUPER_COST` (22 Bomb, 36 Shield, 33 Technology). `setSelectedSuper()` refunds half on a
 mid-game swap.
 
 When the meter is full, `drawPlayer()` adds a tight, pulsing neon outline directly around the
-cached `PLAYER_HULL` path in `playerColor`. The super HUD and every player weapon/super effect use the same theme
-colour, so changing the ship keeps the whole loadout visually coherent.
+cached `PLAYER_HULL` path in the selected super's color. `WEAPON_COLORS` and `SUPER_COLORS`
+give every player attack a stable palette; the hull and general menu chrome still use `playerColor`.
 
 ## Input
 
@@ -213,8 +214,9 @@ Typed into the ADMIN CODE box on the menu (`admin-submit` handler):
 ## Front end
 
 - **Theme.** `setTheme(hex)` writes `--theme` / `--theme-rgb` on the root element; those are the
-  only accent tokens the stylesheet reads, so picking a ship colour re-skins the title, buttons,
-  banners, pause card and wave banner to match.
+  ship/menu accent tokens, so picking a ship colour re-skins the title, buttons, banners, pause
+  card and wave banner. Loadout tiles use their own `--loadout-color`, while the active weapon and
+  super update `--weapon-color` / `--super-color` for the combat HUD.
 - **HUD.** Hearts (`setLives()`, rebuilt only when the count changes so the beat animation
   doesn't restart), wave number centred, score right.
 - **Pause.** Escape calls `setPaused()`, which shows `#pause-screen` (RESUME / CONTROLS / AUDIO / MAIN MENU) and
@@ -226,6 +228,8 @@ Typed into the ADMIN CODE box on the menu (`admin-submit` handler):
   in `localStorage` and applied to the WebAudio buses without restarting the active track.
 - **Change log.** The bottom-left `CHANGE LOG 0.1` button opens a scrollable version-history panel.
   Add each shipped release as a new retained entry so older notes remain available; do not invent old releases.
+- **Mercury defeat.** Losing during `bossMode` opens `#mercury-defeat-screen` with a looping laugh
+  portrait, Mercury's quote, and dedicated retry/menu actions instead of the generic game-over UI.
 
 ## Music
 
@@ -277,7 +281,7 @@ menu button and panel footer. Nothing else touches the `.selected` class; go thr
 - Don't clear to black before something that repaints every pixel anyway — `draw()` skips the
   clear when `drawBossArea`/`drawTestRoom` is about to fill the screen. A redundant
   full-screen fill is the most expensive kind of no-op there is.
-- Enemy and boss colours remain fixed for readability. Every player-owned projectile, charge
-  effect, super, loadout preview and HUD accent instead reads from `playerColor` / the CSS
-  `--theme` tokens.
+- Enemy and boss colours remain fixed for readability. Player projectiles and charge effects read
+  from `WEAPON_COLORS`; supers, their ready outline and super HUD read from `SUPER_COLORS`; only
+  the ship and shared menu chrome read from `playerColor` / the CSS `--theme` tokens.
 - After editing `main.js`, bump the `?v=` in `index.html`'s script tag.

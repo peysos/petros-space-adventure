@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Bangers&family=Press+Start+2P&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="style.css?v=19" />
+  <link rel="stylesheet" href="style.css?v=21" />
 </head>
 <body>
   <canvas id="space-bg"></canvas>
@@ -67,8 +67,9 @@
           <section>
             <h3>PLAYER &amp; COMBAT</h3>
             <ul>
-              <li>Added ship-color weapon effects, a tight high-contrast full-super hull outline, and clean damage shake.</li>
+              <li>Gave every weapon and super its own combat color, plus a tight full-super hull outline and clean damage shake.</li>
               <li>Rebalanced super gain, shrink-mode firing, and the Charge weapon's three power tiers.</li>
+              <li>Raised Shield's cost and shortened its protection window, while giving Bomb a layered shockwave detonation.</li>
               <li>Chargers now pursue the player continuously as projectile-free contact threats.</li>
             </ul>
           </section>
@@ -76,14 +77,15 @@
             <h3>MERCURY</h3>
             <ul>
               <li>Improved tracking, attack variety, telegraphs, facial animation, and arena placement.</li>
-              <li>Refreshed the boss health display and Mercury-destroyed victory presentation with expressive eyebrows and a clearer heart reward.</li>
+              <li>Refreshed the boss health display and Mercury-destroyed victory presentation with a clearer heart reward.</li>
+              <li>Added a dedicated defeat screen where a laughing Mercury delivers his victory line.</li>
             </ul>
           </section>
           <section>
             <h3>MENUS &amp; AUDIO</h3>
             <ul>
               <li>Added centered, expandable audio settings, pause-menu controls, and ship-color keyboard focus.</li>
-              <li>Renamed Lance to Lance of Tech and unified loadout visuals with the selected ship.</li>
+              <li>Renamed the beam super to Technology and gave every loadout tile its own matching palette.</li>
             </ul>
           </section>
         </div>
@@ -107,8 +109,8 @@
         <h3>SUPER ATTACK</h3>
         <div class="weapon-grid">
           <button class="weapon-tile super-tile selected" data-super="bomb"><span class="tile-badge">EQUIPPED</span><span class="projectile-preview bomb-preview"></span><strong>BOMB</strong><small>Large blast</small></button>
-          <button class="weapon-tile super-tile" data-super="invincibility"><span class="tile-badge">EQUIPPED</span><span class="projectile-preview shield-preview"></span><strong>SHIELD</strong><small>5 seconds of<br>invincibility</small></button>
-          <button class="weapon-tile super-tile" data-super="lance"><span class="tile-badge">EQUIPPED</span><span class="projectile-preview lance-preview"><i></i></span><strong>LANCE OF TECH</strong><small>Piercing beam<br>Burns everything in line</small></button>
+          <button class="weapon-tile super-tile" data-super="invincibility"><span class="tile-badge">EQUIPPED</span><span class="projectile-preview shield-preview"></span><strong>SHIELD</strong><small>3 seconds of<br>invincibility</small></button>
+          <button class="weapon-tile super-tile" data-super="lance"><span class="tile-badge">EQUIPPED</span><span class="projectile-preview lance-preview"><i></i></span><strong>TECHNOLOGY</strong><small>Piercing beam<br>Burns everything in line</small></button>
         </div>
       </section>
       <p class="loadout-summary">LOADOUT <strong id="loadout-summary-text">BLASTER + BOMB</strong></p>
@@ -164,8 +166,6 @@
     <div class="victory-rays" aria-hidden="true"></div>
     <div class="victory-card">
       <div class="victory-mercury" role="img" aria-label="Mercury defeated with cartoon X eyes and its tongue out">
-        <span class="dead-brow dead-brow-left"></span>
-        <span class="dead-brow dead-brow-right"></span>
         <span class="dead-eye dead-eye-left">×</span>
         <span class="dead-eye dead-eye-right">×</span>
         <span class="dead-mouth"></span>
@@ -188,7 +188,7 @@
         <div class="victory-loadout-row">
           <button class="victory-choice selected" data-victory-super="bomb" type="button">BOMB</button>
           <button class="victory-choice" data-victory-super="invincibility" type="button">SHIELD</button>
-          <button class="victory-choice" data-victory-super="lance" type="button">LANCE OF TECH</button>
+          <button class="victory-choice" data-victory-super="lance" type="button">TECHNOLOGY</button>
         </div>
       </div>
       <button id="victory-continue" type="button">CONTINUE</button>
@@ -196,6 +196,20 @@
     </div>
   </div>
 
-  <script src="main.js?v=20"></script>
+  <div class="mercury-defeat-screen" id="mercury-defeat-screen" aria-hidden="true">
+    <div class="defeat-card">
+      <div class="laughing-mercury" role="img" aria-label="Mercury laughing after defeating the player">
+        <span class="laugh-eye laugh-eye-left"></span>
+        <span class="laugh-eye laugh-eye-right"></span>
+        <span class="laugh-mouth"><i></i></span>
+      </div>
+      <div class="defeat-title">MERCURY WINS</div>
+      <blockquote>“I'm closest to the sun,<br />but I will ruin your fun.”</blockquote>
+      <button id="defeat-retry" type="button">TRY AGAIN</button>
+      <button id="defeat-menu" class="ghost" type="button">MAIN MENU</button>
+    </div>
+  </div>
+
+  <script src="main.js?v=21"></script>
 </body>
 </html>

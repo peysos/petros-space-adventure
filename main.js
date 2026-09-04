@@ -193,6 +193,8 @@ let bossMode = false;
 let bossIntro = false;
 let playerName = "PLAYER";
 let playerColor = "#7ef9ff";
+const WEAPON_COLORS = { blaster: "#63f7ff", charge: "#ffb43d", cone: "#ff72c8" };
+const SUPER_COLORS = { bomb: "#ff4f4f", invincibility: "#63ff91", lance: "#9d7bff" };
 let selectedWeapon = "blaster";
 let selectedSuper = "bomb";
 let chargeStartedAt = 0;
@@ -237,6 +239,7 @@ let superMeter = 0;
 let lastSuperKills = 0;
 let facing = { x: 0, y: -1 };
 let superBombs = [];
+let bombBlasts = [];
 let superBeam = null;
 let sparks = [];
 let audioContext = null;
@@ -290,6 +293,7 @@ const dom = {
   weaponsPanel: document.getElementById("weapons-panel"),
   bossIntro: document.getElementById("boss-intro"),
   victoryScreen: document.getElementById("victory-screen"),
+  mercuryDefeatScreen: document.getElementById("mercury-defeat-screen"),
   gameUi: document.getElementById("game-ui"),
 };
 
@@ -357,6 +361,7 @@ function isVisibleControl(element) {
 }
 
 function activeMenuRoot() {
+  if (dom.mercuryDefeatScreen.classList.contains("visible")) return dom.mercuryDefeatScreen;
   if (dom.victoryScreen.classList.contains("visible")) return dom.victoryScreen;
   if (dom.bossIntro.classList.contains("visible")) return dom.bossIntro;
   if (dom.weaponsPanel.classList.contains("visible")) return dom.weaponsPanel;
@@ -376,7 +381,7 @@ function focusMenuDefault(root) {
   if (!root) return;
   const preferred = root === dom.menu
     ? document.getElementById("start-btn")
-    : root.querySelector(".selected, #resume-btn, #try-again-btn, #continue-boss, #victory-continue");
+    : root.querySelector(".selected, #resume-btn, #try-again-btn, #defeat-retry, #continue-boss, #victory-continue");
   const target = preferred && isVisibleControl(preferred) ? preferred : menuFocusables(root)[0];
   if (target) target.focus();
 }
@@ -875,21 +880,85 @@ function updateSparks() {
 }
 
 // ---------------------------------------------------------------------------
-// LANCE OF TECH — the super that replaced VOID
+// Bomb detonations persist after the projectile is consumed. Layered rings,
+// energy spokes, a hot core and debris make the super read like a real blast
+// without changing its damage radius.
+// ---------------------------------------------------------------------------
+function startBombBlast(x, y, radius, color = superColor("bomb")) {
+  const rays = [];
+  for (let i = 0; i < 14; i++) {
+    rays.push({ angle: rand(0, Math.PI * 2), reach: rand(0.72, 1.08), width: rand(1.5, 4) });
+  }
+  bombBlasts.push({ x, y, radius, color, life: 30, maxLife: 30, rays });
+  spawnSparks(x, y, 28, color, { minSpeed: 2, maxSpeed: 9, life: 34, minSize: 2, maxSize: 5, drag: 0.95 });
+  spawnSparks(x, y, 18, "#ffbd52", { minSpeed: 1, maxSpeed: 7, life: 26, minSize: 2, maxSize: 4 });
+  spawnSparks(x, y, 10, "#ffffff", { minSpeed: 1, maxSpeed: 5, life: 18, minSize: 1, maxSize: 3 });
+  screenShakeFrames = Math.max(screenShakeFrames, 12);
+  screenShakeStrength = Math.max(screenShakeStrength, 6);
+  playSound(90, 0.42, "sawtooth");
+  playSound(230, 0.18, "square");
+}
+
+function updateBombBlasts() {
+  for (const blast of bombBlasts) {
+    const progress = 1 - blast.life / blast.maxLife;
+    const fade = Math.max(0, 1 - progress);
+    const eased = 1 - Math.pow(1 - progress, 3);
+    const radius = blast.radius * eased;
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.globalAlpha = 0.55 * fade;
+    drawGlow(blast.color, 48, blast.x, blast.y);
+    ctx.fillStyle = blast.color;
+    ctx.globalAlpha = 0.16 * fade;
+    ctx.beginPath(); ctx.arc(blast.x, blast.y, radius * 0.72, 0, Math.PI * 2); ctx.fill();
+    for (const ray of blast.rays) {
+      const inner = radius * 0.2;
+      const outer = radius * ray.reach;
+      ctx.globalAlpha = 0.5 * fade;
+      ctx.strokeStyle = progress < 0.35 ? "#ffffff" : blast.color;
+      ctx.lineWidth = ray.width * fade;
+      ctx.beginPath();
+      ctx.moveTo(blast.x + Math.cos(ray.angle) * inner, blast.y + Math.sin(ray.angle) * inner);
+      ctx.lineTo(blast.x + Math.cos(ray.angle) * outer, blast.y + Math.sin(ray.angle) * outer);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 0.95 * fade;
+    ctx.strokeStyle = blast.color;
+    ctx.lineWidth = Math.max(2, 8 * fade);
+    ctx.beginPath(); ctx.arc(blast.x, blast.y, radius, 0, Math.PI * 2); ctx.stroke();
+    if (progress > 0.12) {
+      const secondRadius = blast.radius * Math.min(1, (progress - 0.12) * 1.35);
+      ctx.globalAlpha = 0.72 * fade;
+      ctx.strokeStyle = "#ffcf70";
+      ctx.lineWidth = Math.max(1, 4 * fade);
+      ctx.beginPath(); ctx.arc(blast.x, blast.y, secondRadius, 0, Math.PI * 2); ctx.stroke();
+    }
+    ctx.globalAlpha = fade;
+    ctx.fillStyle = "#ffffff";
+    ctx.beginPath(); ctx.arc(blast.x, blast.y, Math.max(0, 18 * (1 - progress * 1.5)), 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+    blast.life--;
+  }
+  compact(bombBlasts, (blast) => blast.life > 0);
+}
+
+// ---------------------------------------------------------------------------
+// TECHNOLOGY — a piercing beam locked to the direction it was fired
 //
 // A beam locked to the direction you fired it, anchored to the ship so it sweeps
 // as you move. It pierces everything, which is what the other two supers don't
-// do: BOMB is a point blast, SHIELD is defensive, LANCE OF TECH is a line.
+// do: BOMB is a point blast, SHIELD is defensive, TECHNOLOGY is a line.
 // ---------------------------------------------------------------------------
 const BEAM_FRAMES = 52;
 const BEAM_HALF_WIDTH = 17;
 const BEAM_TICK = 8;
 
 function fireLance() {
-  superBeam = { angle: Math.atan2(facing.y, facing.x), life: BEAM_FRAMES };
+  superBeam = { angle: Math.atan2(facing.y, facing.x), life: BEAM_FRAMES, color: superColor("lance") };
   playSound(1200, 0.25, "sawtooth");
   playSound(300, 0.5, "square");
-  spawnSparks(player.x, player.y, 26, playerColor, {
+  spawnSparks(player.x, player.y, 26, superBeam.color, {
     angle: superBeam.angle, spread: 0.5, minSpeed: 2, maxSpeed: 7, life: 26, maxSize: 4,
   });
 }
@@ -908,12 +977,13 @@ function damageAlongBeam(enemy, ey) {
   if (superBeam.life % BEAM_TICK !== 0) return;
   if (beamDistance(enemy.x, ey) < BEAM_HALF_WIDTH + enemy.w * 0.6) {
     damageEnemy(enemy, 2);
-    spawnSparks(enemy.x, ey, 5, playerColor, { life: 16 });
+    spawnSparks(enemy.x, ey, 5, superBeam.color, { life: 16 });
   }
 }
 
 function updateSuperBeam(t) {
   if (!superBeam) return;
+  const color = superBeam.color || superColor("lance");
   const progress = 1 - superBeam.life / BEAM_FRAMES;
   // snaps open, holds, then collapses
   const width = progress < 0.12
@@ -927,7 +997,7 @@ function updateSuperBeam(t) {
   ctx.rotate(superBeam.angle);
   ctx.globalCompositeOperation = "lighter";
   ctx.globalAlpha = 0.22 * flicker;
-  ctx.fillStyle = playerColor;
+  ctx.fillStyle = color;
   ctx.fillRect(0, -width * 2.1, length, width * 4.2);
   ctx.globalAlpha = 0.5 * flicker;
   ctx.fillRect(0, -width, length, width * 2);
@@ -938,9 +1008,9 @@ function updateSuperBeam(t) {
   ctx.globalCompositeOperation = "source-over";
   ctx.restore();
 
-  drawGlow(playerColor, 30, player.x, player.y);
+  drawGlow(color, 30, player.x, player.y);
   if (superBeam.life % 3 === 0) {
-    spawnSparks(player.x, player.y, 2, playerColor, {
+    spawnSparks(player.x, player.y, 2, color, {
       angle: superBeam.angle, spread: 1.1, minSpeed: 1, maxSpeed: 4, life: 18,
     });
   }
@@ -964,7 +1034,7 @@ function drawChargeAura(t) {
   if (ratio <= 0 || ratio >= 1) return;
   const radius = (player.shrunk ? 22 : 32) * (1.35 - ratio * 0.35);
   const pulse = Math.sin(t * 0.012) * 1.5;
-  const color = playerColor;
+  const color = weaponColor("charge");
 
   // A restrained gathering ring; no orbiting embers or flame cloud.
   ctx.strokeStyle = color;
@@ -1120,27 +1190,26 @@ function drawGame(t) {
         break;
       }
     }
-    drawGlow(playerColor, 18, bomb.x, bomb.y);
-    ctx.fillStyle = playerColor;
+    const color = bomb.color || superColor("bomb");
+    drawGlow(color, 18, bomb.x, bomb.y);
+    ctx.fillStyle = color;
     ctx.beginPath(); ctx.arc(bomb.x, bomb.y, 9, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#fff3d6";
+    ctx.beginPath(); ctx.arc(bomb.x - 2, bomb.y - 2, 3, 0, Math.PI * 2); ctx.fill();
     if (bomb.life <= 0 || bomb.x < 0 || bomb.x > W || bomb.y < 0 || bomb.y > H) bomb.explode = true;
   }
   for (const bomb of superBombs) {
     if (!bomb.explode) continue;
     const blastRadius = 125;
-    ctx.strokeStyle = playerColor;
-    ctx.globalAlpha = 0.8;
-    ctx.lineWidth = 5;
-    ctx.beginPath(); ctx.arc(bomb.x, bomb.y, blastRadius, 0, Math.PI * 2); ctx.stroke();
-    ctx.globalAlpha = 1;
+    startBombBlast(bomb.x, bomb.y, blastRadius, bomb.color);
     for (const enemy of enemies) {
       if (enemy.alive && Math.hypot(enemy.x - bomb.x, enemy.y - bomb.y) < blastRadius) {
         enemy.alive = false; score += 100; kills++;
       }
     }
-    playSound(110, 0.3, "sawtooth");
   }
   compact(superBombs, (b) => !b.explode);
+  updateBombBlasts();
   updateSuperMeter();
   updateSuperBeam(t);
   drawChargeAura(t);
@@ -1149,26 +1218,7 @@ function drawGame(t) {
   for (const bullet of bullets) {
     bullet.x += bullet.vx;
     bullet.y += bullet.vy;
-    ctx.save();
-    ctx.translate(bullet.x, bullet.y);
-    ctx.rotate(Math.atan2(bullet.vy, bullet.vx) + Math.PI / 2);
-    if (bullet.type === "charge") {
-      const hot = (bullet.damage || 1) >= 4;
-      drawGlow(playerColor, hot ? 20 : 12, 0, 0);
-      ctx.fillStyle = playerColor;
-      ctx.beginPath(); ctx.arc(0, 0, bullet.size, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = "#ffffff";
-      ctx.beginPath(); ctx.arc(0, 0, bullet.size * 0.45, 0, Math.PI * 2); ctx.fill();
-      if (hot) {
-        spawnSparks(bullet.x - bullet.vx * 0.5, bullet.y - bullet.vy * 0.5, 2,
-          Math.random() < 0.35 ? "#ffffff" : playerColor,
-          { minSpeed: 0.2, maxSpeed: 1.2, life: 18, maxSize: 3 });
-      }
-    } else if (bullet.type === "cone") {
-      ctx.fillStyle = playerColor;
-      ctx.beginPath(); ctx.moveTo(0, -7); ctx.lineTo(4, 0); ctx.lineTo(0, 7); ctx.lineTo(-4, 0); ctx.closePath(); ctx.fill();
-    } else { ctx.fillStyle = playerColor; ctx.fillRect(-2, -6, 4, 12); }
-    ctx.restore();
+    drawPlayerBullet(bullet);
   }
   compact(bullets, (b) => b.x > -20 && b.x < W + 20 && b.y > -20 && b.y < H + 20);
   updateSparks();
@@ -2020,11 +2070,11 @@ function drawBossArea(t) {
   updateBossParticles();
   updateSparks();
 
-  // LANCE OF TECH burns the boss for as long as the beam is on it
+  // TECHNOLOGY burns the boss for as long as the beam is on it
   if (superBeam && !bossDying && superBeam.life % BEAM_TICK === 0 && beamDistance(boss.x, boss.y) < BEAM_HALF_WIDTH + BOSS_RADIUS * 0.8) {
     damageBoss(3, player.x, player.y);
     superDamage += 3;
-    spawnSparks(boss.x, boss.y, 8, playerColor, { life: 20 });
+    spawnSparks(boss.x, boss.y, 8, superBeam.color || superColor("lance"), { life: 20 });
   }
 
   if (!bossDying) {
@@ -2132,40 +2182,24 @@ function drawBossArea(t) {
 
   for (const bomb of superBombs) {
     bomb.x += bomb.vx; bomb.y += bomb.vy; bomb.life--;
-    drawGlow(playerColor, 18, bomb.x, bomb.y);
-    ctx.fillStyle = playerColor;
+    const color = bomb.color || superColor("bomb");
+    drawGlow(color, 18, bomb.x, bomb.y);
+    ctx.fillStyle = color;
     ctx.beginPath(); ctx.arc(bomb.x, bomb.y, 9, 0, Math.PI * 2); ctx.fill();
     if (Math.hypot(bomb.x - boss.x, bomb.y - boss.y) < 88 || bomb.life <= 0) {
       if (!bossDying) damageBoss(15, bomb.x, bomb.y);
       bossExplosions.push({ x: bomb.x, y: bomb.y, r: 0, max: 110, life: 18, maxLife: 18 });
+      startBombBlast(bomb.x, bomb.y, 110, color);
       bomb.explode = true;
     }
   }
   compact(superBombs, (bomb) => !bomb.explode);
+  updateBombBlasts();
 
   for (const bullet of bullets) {
     bullet.x += bullet.vx;
     bullet.y += bullet.vy;
-    ctx.save();
-    ctx.translate(bullet.x, bullet.y);
-    ctx.rotate(Math.atan2(bullet.vy, bullet.vx) + Math.PI / 2);
-    if (bullet.type === "charge") {
-      const hot = (bullet.damage || 1) >= 4;
-      drawGlow(playerColor, hot ? 20 : 12, 0, 0);
-      ctx.fillStyle = playerColor;
-      ctx.beginPath(); ctx.arc(0, 0, bullet.size, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = "#ffffff";
-      ctx.beginPath(); ctx.arc(0, 0, bullet.size * 0.45, 0, Math.PI * 2); ctx.fill();
-      if (hot) {
-        spawnSparks(bullet.x - bullet.vx * 0.5, bullet.y - bullet.vy * 0.5, 2,
-          Math.random() < 0.35 ? "#ffffff" : playerColor,
-          { minSpeed: 0.2, maxSpeed: 1.2, life: 18, maxSize: 3 });
-      }
-    } else if (bullet.type === "cone") {
-      ctx.fillStyle = playerColor;
-      ctx.beginPath(); ctx.moveTo(0, -7); ctx.lineTo(4, 0); ctx.lineTo(0, 7); ctx.lineTo(-4, 0); ctx.closePath(); ctx.fill();
-    } else { ctx.fillStyle = playerColor; ctx.fillRect(-2, -6, 4, 12); }
-    ctx.restore();
+    drawPlayerBullet(bullet);
     if (!bossDying && Math.hypot(bullet.x - boss.x, bullet.y - boss.y) < 82) {
       bullet.y = -100;
       damageBoss(bullet.damage || 1, bullet.x, bullet.y);
@@ -2245,19 +2279,21 @@ function drawTestRoom() {
   ctx.fillStyle = "#07131a"; ctx.fillRect(0, 0, W, H);
   for (const bomb of superBombs) {
     bomb.x += bomb.vx; bomb.y += bomb.vy; bomb.life--;
-    drawGlow(playerColor, 16, bomb.x, bomb.y);
-    ctx.fillStyle = playerColor;
+    const color = bomb.color || superColor("bomb");
+    drawGlow(color, 16, bomb.x, bomb.y);
+    ctx.fillStyle = color;
     ctx.beginPath(); ctx.arc(bomb.x, bomb.y, 10, 0, Math.PI * 2); ctx.fill();
-    if (Math.hypot(bomb.x - W / 2, bomb.y - 190) < 68 || bomb.life <= 0) { bomb.explode = true; testDamage += 15; }
+    if (Math.hypot(bomb.x - W / 2, bomb.y - 190) < 68 || bomb.life <= 0) {
+      bomb.explode = true;
+      testDamage += 15;
+      startBombBlast(bomb.x, bomb.y, 110, color);
+    }
   }
   compact(superBombs, (bomb) => !bomb.explode);
+  updateBombBlasts();
   for (const bullet of bullets) {
     bullet.x += bullet.vx; bullet.y += bullet.vy;
-    ctx.save(); ctx.translate(bullet.x, bullet.y); ctx.rotate(Math.atan2(bullet.vy, bullet.vx) + Math.PI / 2);
-    if (bullet.type === "charge") { ctx.fillStyle = playerColor; ctx.beginPath(); ctx.arc(0, 0, bullet.size, 0, Math.PI * 2); ctx.fill(); }
-    else if (bullet.type === "cone") { ctx.fillStyle = playerColor; ctx.beginPath(); ctx.moveTo(0,-7); ctx.lineTo(4,0); ctx.lineTo(0,7); ctx.lineTo(-4,0); ctx.closePath(); ctx.fill(); }
-    else { ctx.fillStyle = playerColor; ctx.fillRect(-2, -6, 4, 12); }
-    ctx.restore();
+    drawPlayerBullet(bullet);
     if (Math.hypot(bullet.x - W / 2, bullet.y - 190) < 58) { bullet.y = -100; testDamage += bullet.damage || 1; superDamage += bullet.damage || 1; updateSuperMeter(); }
   }
   compact(bullets, (b) => b.y > -20 && b.y < H + 20 && b.x > -20 && b.x < W + 20);
@@ -2290,7 +2326,8 @@ function drawPlayer() {
     // never a circular lantern aura around the player.
     const pulse = 0.92 + Math.sin(now * 0.01) * 0.08;
     ctx.globalCompositeOperation = "lighter";
-    ctx.strokeStyle = playerColor;
+    const readyColor = superColor();
+    ctx.strokeStyle = readyColor;
     ctx.lineJoin = "round";
     ctx.globalAlpha = 0.18 * pulse;
     ctx.lineWidth = 12;
@@ -2300,7 +2337,7 @@ function drawPlayer() {
     ctx.stroke(PLAYER_HULL);
     ctx.globalAlpha = pulse;
     ctx.lineWidth = 4.5;
-    ctx.shadowColor = playerColor;
+    ctx.shadowColor = readyColor;
     ctx.shadowBlur = 4;
     ctx.stroke(PLAYER_HULL);
     ctx.shadowBlur = 0;
@@ -2314,19 +2351,21 @@ function drawPlayer() {
   if (invincibilitySuperTimer > 0) {
     const radius = player.shrunk ? 29 : 42;
     const pulse = Math.sin(performance.now() * 0.012) * 2;
-    drawGlow(playerColor, 16, player.x, player.y);
+    const shieldColor = superColor("invincibility");
+    drawGlow(shieldColor, 16, player.x, player.y);
     ctx.save();
     ctx.globalAlpha = 0.14;
-    ctx.fillStyle = playerColor;
+    ctx.fillStyle = shieldColor;
     ctx.beginPath(); ctx.arc(player.x, player.y, radius + pulse, 0, Math.PI * 2); ctx.fill();
     ctx.restore();
-    ctx.strokeStyle = playerColor;
+    ctx.strokeStyle = shieldColor;
     ctx.lineWidth = 3;
     ctx.beginPath(); ctx.arc(player.x, player.y, radius + pulse, 0, Math.PI * 2); ctx.stroke();
   }
 }
 
 function endGame() {
+  const defeatedByMercury = bossMode;
   gameActive = false;
   playSound(90, 0.55, "sawtooth");
   playSound(60, 1.1, "sawtooth");
@@ -2337,6 +2376,18 @@ function endGame() {
   superBeam = null;
   gameOverShown = true;
   enemyBullets = [];
+  if (defeatedByMercury) {
+    setText(dom.gameMessage, "");
+    document.getElementById("try-again-btn").classList.remove("visible");
+    document.getElementById("main-menu-btn").classList.remove("visible");
+    dom.mercuryDefeatScreen.classList.add("visible");
+    dom.mercuryDefeatScreen.setAttribute("aria-hidden", "false");
+    playSound(420, 0.12, "square");
+    setTimeout(() => playSound(540, 0.12, "square"), 130);
+    setTimeout(() => playSound(660, 0.18, "square"), 260);
+    focusMenuDefault(dom.mercuryDefeatScreen);
+    return;
+  }
   setText(dom.gameMessage, "GAME OVER");
   document.getElementById("try-again-btn").classList.add("visible");
   document.getElementById("main-menu-btn").classList.add("visible");
@@ -2361,6 +2412,7 @@ function startGame() {
   bullets = [];
   enemyBullets = [];
   superBombs = [];
+  bombBlasts = [];
   setPaused(false);
   sparks = [];
   superBeam = null;
@@ -2398,6 +2450,8 @@ function startGame() {
   document.getElementById("boss-intro").classList.remove("visible");
   document.getElementById("victory-screen").classList.remove("visible");
   document.getElementById("victory-screen").setAttribute("aria-hidden", "true");
+  dom.mercuryDefeatScreen.classList.remove("visible");
+  dom.mercuryDefeatScreen.setAttribute("aria-hidden", "true");
   playerName = "PLAYER";
   setText(dom.score, "000000");
   setLives(lives);
@@ -2407,16 +2461,26 @@ function startGame() {
 // ---------------------------------------------------------------------------
 // Front-end skin
 //
-// The ship colour drives the whole menu: --theme / --theme-rgb are the only
-// accent tokens the stylesheet reads, so setting them here re-skins the title,
-// buttons, banners, HUD and pause card in one write.
+// Ship chrome stays tied to the chosen hull, while weapon and super accents use
+// their own palettes so the loadout is readable before and during combat.
 // ---------------------------------------------------------------------------
-function setTheme(hex) {
+function rgbString(hex) {
   const value = parseInt(hex.slice(1), 16);
-  const rgb = `${(value >> 16) & 255}, ${(value >> 8) & 255}, ${value & 255}`;
+  return `${(value >> 16) & 255}, ${(value >> 8) & 255}, ${value & 255}`;
+}
+
+function weaponColor(type = selectedWeapon) {
+  return WEAPON_COLORS[type] || WEAPON_COLORS.blaster;
+}
+
+function superColor(type = selectedSuper) {
+  return SUPER_COLORS[type] || SUPER_COLORS.bomb;
+}
+
+function setTheme(hex) {
   const root = document.documentElement;
   root.style.setProperty("--theme", hex);
-  root.style.setProperty("--theme-rgb", rgb);
+  root.style.setProperty("--theme-rgb", rgbString(hex));
 }
 
 const MAX_DRAWN_HEARTS = 8;
@@ -2481,6 +2545,7 @@ function returnToMenu() {
   bossBullets = [];
   bullets = [];
   superBombs = [];
+  bombBlasts = [];
   superBeam = null;
   dom.pauseScreen.classList.remove("visible");
   dom.pauseScreen.setAttribute("aria-hidden", "true");
@@ -2490,6 +2555,9 @@ function returnToMenu() {
   document.getElementById("boss-health").classList.remove("visible");
   document.getElementById("boss-intro").classList.remove("visible");
   document.getElementById("victory-screen").classList.remove("visible");
+  document.getElementById("victory-screen").setAttribute("aria-hidden", "true");
+  dom.mercuryDefeatScreen.classList.remove("visible");
+  dom.mercuryDefeatScreen.setAttribute("aria-hidden", "true");
   setText(dom.gameMessage, "");
   document.getElementById("try-again-btn").classList.remove("visible");
   document.getElementById("main-menu-btn").classList.remove("visible");
@@ -2504,7 +2572,7 @@ function flashDamage() {
   flash.classList.add("active");
 }
 
-const SUPER_COST = { bomb: 22, invincibility: 22, lance: 33 };
+const SUPER_COST = { bomb: 22, invincibility: 36, lance: 33 };
 let superReadyShown = false;
 
 function updateSuperMeter() {
@@ -2523,12 +2591,19 @@ function updateSuperMeter() {
 }
 
 const WEAPON_LABELS = { blaster: "BLASTER", charge: "CHARGE", cone: "CONE" };
-const SUPER_LABELS = { bomb: "BOMB", invincibility: "SHIELD", lance: "LANCE OF TECH" };
+const SUPER_LABELS = { bomb: "BOMB", invincibility: "SHIELD", lance: "TECHNOLOGY" };
 
 // Every place a loadout can be picked (weapons panel + victory screen) is
 // repainted from `selectedWeapon` / `selectedSuper`, so the highlight can never
 // drift out of sync with what the ship actually fires.
 function refreshLoadoutUI() {
+  const root = document.documentElement;
+  const activeWeaponColor = weaponColor();
+  const activeSuperColor = superColor();
+  root.style.setProperty("--weapon-color", activeWeaponColor);
+  root.style.setProperty("--weapon-rgb", rgbString(activeWeaponColor));
+  root.style.setProperty("--super-color", activeSuperColor);
+  root.style.setProperty("--super-rgb", rgbString(activeSuperColor));
   document.querySelectorAll("[data-weapon], [data-victory-weapon]").forEach((item) => {
     const value = item.dataset.weapon || item.dataset.victoryWeapon;
     item.classList.toggle("selected", value === selectedWeapon);
@@ -2922,7 +2997,35 @@ function fireInDirection(dx, dy, damage = 1, type = "basic", size = 3) {
   const pierceRemaining = type === "charge" && damage >= 5 ? Infinity
     : type === "charge" && damage >= 3 ? 3
     : 1;
-  bullets.push({ x: player.x, y: player.y, vx: dx * 10, vy: dy * 10, damage, type, size, pierceRemaining });
+  const color = weaponColor(type === "basic" ? "blaster" : type);
+  bullets.push({ x: player.x, y: player.y, vx: dx * 10, vy: dy * 10, damage, type, size, pierceRemaining, color });
+}
+
+function drawPlayerBullet(bullet) {
+  const color = bullet.color || weaponColor(bullet.type === "basic" ? "blaster" : bullet.type);
+  ctx.save();
+  ctx.translate(bullet.x, bullet.y);
+  ctx.rotate(Math.atan2(bullet.vy, bullet.vx) + Math.PI / 2);
+  if (bullet.type === "charge") {
+    const hot = (bullet.damage || 1) >= 4;
+    drawGlow(color, hot ? 20 : 12, 0, 0);
+    ctx.fillStyle = color;
+    ctx.beginPath(); ctx.arc(0, 0, bullet.size, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#ffffff";
+    ctx.beginPath(); ctx.arc(0, 0, bullet.size * 0.45, 0, Math.PI * 2); ctx.fill();
+    if (hot) {
+      spawnSparks(bullet.x - bullet.vx * 0.5, bullet.y - bullet.vy * 0.5, 2,
+        Math.random() < 0.35 ? "#ffffff" : color,
+        { minSpeed: 0.2, maxSpeed: 1.2, life: 18, maxSize: 3 });
+    }
+  } else if (bullet.type === "cone") {
+    ctx.fillStyle = color;
+    ctx.beginPath(); ctx.moveTo(0, -7); ctx.lineTo(4, 0); ctx.lineTo(0, 7); ctx.lineTo(-4, 0); ctx.closePath(); ctx.fill();
+  } else {
+    ctx.fillStyle = color;
+    ctx.fillRect(-2, -6, 4, 12);
+  }
+  ctx.restore();
 }
 
 let chargeMeterShown = false;
@@ -2943,13 +3046,13 @@ function updateChargeMeter() {
   }
   if (!active || !chargeStartedAt) {
     setWidth(dom.chargeFill, 0);
-    setChargeColor(playerColor);
+    setChargeColor(weaponColor("charge"));
     return;
   }
   const held = performance.now() - chargeStartedAt;
   const full = held >= CHARGE_FULL_MS;
   setWidth(dom.chargeFill, Math.min(100, held / CHARGE_FULL_MS * 100));
-  setChargeColor(playerColor);
+  setChargeColor(weaponColor("charge"));
   if (full !== chargeMeterFull) {
     chargeMeterFull = full;
     dom.chargeMeter.classList.toggle("full", full);
@@ -3051,6 +3154,12 @@ document.getElementById("try-again-btn").addEventListener("click", function () {
   showLoading(startGame);
 });
 document.getElementById("main-menu-btn").addEventListener("click", returnToMenu);
+document.getElementById("defeat-retry").addEventListener("click", function () {
+  dom.mercuryDefeatScreen.classList.remove("visible");
+  dom.mercuryDefeatScreen.setAttribute("aria-hidden", "true");
+  showLoading(startGame);
+});
+document.getElementById("defeat-menu").addEventListener("click", returnToMenu);
 document.getElementById("resume-btn").addEventListener("click", function () {
   setPaused(false);
 });
@@ -3192,13 +3301,13 @@ window.addEventListener("keyup", function (e) {
   }
   if (e.code === "Space" && gameActive && !bossIntro && !gamePaused && performance.now() - spaceDownAt <= 180 && superMeter >= 1) {
     if (selectedSuper === "invincibility") {
-      playerInvulnerable = 300;
-      invincibilitySuperTimer = 300;
+      playerInvulnerable = 180;
+      invincibilitySuperTimer = 180;
       playSound(880, 0.3, "triangle");
     } else if (selectedSuper === "lance") {
       fireLance();
     } else {
-      superBombs.push({ x: player.x, y: player.y, vx: facing.x * 8, vy: facing.y * 8, life: 75, explode: false });
+      superBombs.push({ x: player.x, y: player.y, vx: facing.x * 8, vy: facing.y * 8, life: 75, explode: false, color: superColor("bomb") });
       playSound(180, 0.18, "triangle");
     }
     lastSuperKills = superDamage;
