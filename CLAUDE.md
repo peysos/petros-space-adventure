@@ -7,7 +7,7 @@ no package manager — plain HTML + CSS + a single `<canvas>` game loop in vanil
 
 | File | Role |
 | --- | --- |
-| `index.html` | All DOM: menu, weapons/controls modals, loading screen, HUD, boss intro, victory screen. Loads `main.js?v=16` (bump the query string to bust cache). |
+| `index.html` | All DOM: menu, weapons/controls/change-log modals, loading screen, HUD, boss intro, victory screen. Loads the CSS and `main.js` with versioned query strings (bump changed assets to bust cache). |
 | `main.js` | The entire game: state, render loop, physics, collisions, input, music/SFX synthesis, UI wiring. |
 | `style.css` | Retro arcade-cabinet theme: CRT scanline overlay, pixel type, hard-edged chunky controls. Uses Bangers (title) and Press Start 2P (everything else) from Google Fonts. |
 | `favicon.svg` | Inline red "P" mark. |
@@ -113,10 +113,11 @@ debris swarm that orbits on per-shard inclinations, drawn behind and in front of
 The face tracks the ship — pupils follow the player, the body leans toward them, and it blinks
 on its own timer.
 
-It also **moves**: `bossDrift` sweeps it across the arena with a light bias toward the player,
-and `bossBurstTimer` fires a slow eight-way radial burst roughly every 9 seconds. Its homing
-meteor tracks for a shorter window, while the three-way spread has a longer telegraph and
-recovery. These patterns deny static safe spots without making the first boss overly punishing.
+It also **moves** lower in the arena: `bossDrift` sweeps it laterally with a stronger bias toward
+the player's position. `trackedBossAngle()` leads the player's velocity for aimed attacks.
+Meteor volleys randomly choose single homing, paired tracking, or three-way predictive shots;
+the orb attack chooses a three-shot fan, five-shot fan, or fast pair; radial bursts randomize
+their count, phase, and recovery. The ranges keep the variety from becoming a pure fire-rate buff.
 
 ### Mercury's animation states
 
@@ -124,8 +125,8 @@ recovery. These patterns deny static safe spots without making the first boss ov
 
 | Counter | Effect |
 | --- | --- |
-| `bossChargeAnim` | Wind-up before a shot: inhale (squash), corona reddens, eyes swell, mouth puckers. |
-| `bossShootAnim` | Recoil: stretch outward, mouth gapes, muzzle particles. |
+| `bossChargeAnim` | Wind-up before a shot: inhale (squash), corona reddens, eyes swell, teeth clench. |
+| `bossShootAnim` | Recoil: stretch outward, mouth opens with two tooth rows and a muzzle flash. |
 | `bossHitFlash` | Damage: white flash, shake, eyes squint, rock chips fly back along the shot. |
 | `bossDeathTimer` | Death: shake, glowing cracks, chained explosions, then fade at the final blast. |
 
@@ -140,7 +141,7 @@ Three types, defined in `ENEMY_TYPES` and driven by `updateEnemy()` / `drawEnemy
 | Type | HP | Behaviour |
 | --- | --- | --- |
 | `grunt` | 1 | Holds formation, bobs. Fires the shared slow **homing** shot on `enemyShotTimer`. |
-| `charger` | 2 | `idle → wind → dash → return` state machine. Telegraphs with a red ring, spits two **straight** shots on the wind-up, then lunges at where the player is standing. |
+| `charger` | 2 | `idle → wind → hunt` state machine. Telegraphs with a red ring, then continuously steers into the player until destroyed. It is a pure contact threat and fires no projectiles. |
 | `turret` | 3 | Never moves. Barrel tracks the player; fires a three-way **straight** spread. |
 
 `waveRoster(n)` decides the mix (wave 2 introduces chargers, wave 3 turrets, wave 4 both);
@@ -155,12 +156,13 @@ fixed 150-frame budget and then commits, which makes the tracking honest rather 
 
 Primary weapon (`selectedWeapon`):
 - `blaster` — auto-fires on held arrow keys, `fireCooldown = 10`, 1 damage.
-- `charge` — hold an arrow, release to fire. Damage `1–5` scaled by hold time (`/500ms`),
-  projectile size `3–9`. Charge state lives in `chargeStartedAt` / `chargeDirection`.
-- `cone` — three shots at ±0.16 rad, `fireCooldown = 18`.
+- `charge` — hold an arrow, release to fire. It has three discrete tiers: 1 damage below half,
+  3 damage at half charge with a three-target cap, and 5 damage at full charge with infinite
+  pierce. Charge state lives in `chargeStartedAt` / `chargeDirection`.
+- `cone` — three 1-damage shots at ±0.16 rad, `fireCooldown = 18`.
 
-At full charge the ship visibly catches fire (`drawChargeAura`), and the charged round
-leaves a flame trail.
+Below full charge, `drawChargeAura()` shows a contracting ring. At full charge the ring clears
+and `drawPlayer()` applies only a subtle hull shake; the full-power round keeps its flame trail.
 
 Super (`selectedSuper`), fired by a **short** Space tap when `superMeter >= 1`:
 - `bomb` — projectile with a 125px blast radius (15 damage to the boss).
@@ -174,8 +176,8 @@ Meter math is in `updateSuperMeter()`: `(superDamage - lastSuperKills) / require
 with costs in `SUPER_COST` (22, 22, 33 for Lance of Tech). `setSelectedSuper()` refunds half on a
 mid-game swap.
 
-When the meter is full, `drawSuperReadyAura()` adds a large pulsing, orbiting glow around the
-ship in `playerColor`. The super HUD and every player weapon/super effect use the same theme
+When the meter is full, `drawPlayer()` adds a tight, pulsing neon outline directly around the
+cached `PLAYER_HULL` path in `playerColor`. The super HUD and every player weapon/super effect use the same theme
 colour, so changing the ship keeps the whole loadout visually coherent.
 
 ## Input
@@ -186,13 +188,14 @@ colour, so changing the ship keeps the whole loadout visually coherent.
   falls back to `lastArrowDirection` when nothing is held. Firing happens only in `drawGame`
   off `fireCooldown`; arrow keydown just zeroes the cooldown, so a diagonal is one shot at 45°
   rather than one per axis. Movement input is normalized so diagonals aren't ~41% faster.
-- `Space` **hold** (>180ms) — shrink to 0.55 scale: smaller hitbox, 1.4× speed, half damage.
+- `Space` **hold** (>180ms) — shrink to 0.55 scale: smaller hitbox and 1.4× speed, but primary
+  weapons fire at one-third their normal rate. Shot damage is unchanged.
 - `Space` **tap** (≤180ms) — fire super. The hold/tap split is `spaceDownAt` vs `performance.now()`.
 - `Esc` — pause.
 - `blur` — clears all keys so the ship doesn't drift when the tab loses focus.
 - Outside active gameplay, arrow keys move focus spatially through the menu, audio controls,
   loadout grids, pause screen and victory choices. Enter/Space activates the focused control;
-  Escape closes the controls or weapons panel and resumes from pause.
+  Escape closes the active audio drawer, controls or weapons panel before resuming from pause.
 
 ## Admin codes
 
@@ -214,12 +217,15 @@ Typed into the ADMIN CODE box on the menu (`admin-submit` handler):
   banners, pause card and wave banner to match.
 - **HUD.** Hearts (`setLives()`, rebuilt only when the count changes so the beat animation
   doesn't restart), wave number centred, score right.
-- **Pause.** Escape calls `setPaused()`, which shows `#pause-screen` (RESUME / MAIN MENU) and
+- **Pause.** Escape calls `setPaused()`, which shows `#pause-screen` (RESUME / CONTROLS / AUDIO / MAIN MENU) and
   ducks the music. `returnToMenu()` is the single teardown path shared by the pause card and the
   game-over button.
-- **Audio controls.** The menu and pause card both expose synchronized Music and Game SFX
-  sliders plus a global mute toggle. Preferences are stored under `petros-space-adventure-audio`
+- **Audio controls.** The menu and pause card each use a centered, text-only AUDIO button for
+  synchronized Music and Game SFX sliders
+  plus a global mute toggle inside a collapsed drawer. Preferences are stored under `petros-space-adventure-audio`
   in `localStorage` and applied to the WebAudio buses without restarting the active track.
+- **Change log.** The bottom-left `CHANGE LOG 0.1` button opens a scrollable version-history panel.
+  Add each shipped release as a new retained entry so older notes remain available; do not invent old releases.
 
 ## Music
 
@@ -249,7 +255,7 @@ menu button and panel footer. Nothing else touches the `.selected` class; go thr
   `translate`/`rotate`; reset `ctx.shadowBlur = 0` after any glow.
 - SFX are generated on the fly via `playSound(freq, duration, type)`; the `AudioContext` is
   created lazily by `ensureAudio()` and every call no-ops if it is null.
-- `sparks` is the shared particle pool for every arena (thruster trails, charge flames, debris);
+- `sparks` is the shared particle pool for every arena (thruster trails, projectile flames, debris);
   `bossParticles` / `bossExplosions` are boss-arena only.
 - Collisions are cheap: axis-aligned `Math.abs` box checks for enemies/bullets,
   `Math.hypot` circles for the boss and blasts.
@@ -258,8 +264,8 @@ menu button and panel footer. Nothing else touches the `.selected` class; go thr
   `lastArrowDirection` and `currentAimVector()`'s result are mutated, never replaced. Per-frame
   `filter`/object literals are the main source of GC pauses here.
 - **Anything constant is built once**, not per frame: the boss arena grid is stroked into the
-  `bossGridLayer` offscreen canvas on resize and blitted; Mercury's body/terminator/mouth
-  gradients and the warp starfield's `rgba()` strings are cached; the corona gradient is
+  `bossGridLayer` offscreen canvas on resize and blitted; the player hull is a cached `Path2D`;
+  Mercury's body/terminator gradients and the warp starfield's `rgba()` strings are cached; the corona gradient is
   rebuilt only when its radius or colour changes. Creating a gradient or setting a clip every
   frame is expensive — reach for a cache first.
 - The canvas context is opaque (`alpha: false`) and always painted edge to edge; don't rely

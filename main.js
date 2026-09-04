@@ -2,6 +2,15 @@ const canvas = document.getElementById("space-bg");
 // alpha:false lets the compositor skip blending the canvas against the page.
 const ctx = canvas.getContext("2d", { alpha: false, desynchronized: true });
 
+// Reused for the ship fill and its super-ready outline. Keeping this as one
+// cached path also avoids rebuilding the same hull geometry every frame.
+const PLAYER_HULL = new Path2D();
+PLAYER_HULL.moveTo(0, -20);
+PLAYER_HULL.lineTo(-18, 16);
+PLAYER_HULL.lineTo(0, 9);
+PLAYER_HULL.lineTo(18, 16);
+PLAYER_HULL.closePath();
+
 // W/H are always CSS pixels — every coordinate in this file is a CSS pixel, and
 // nothing below needs to know about the render scale.
 let W, H;
@@ -189,8 +198,8 @@ let selectedSuper = "bomb";
 let chargeStartedAt = 0;
 let chargeDirection = { x: 0, y: -1 };
 let lastArrowDirection = { x: 0, y: -1 };
-let boss = { x: 0, y: 180, health: 75 };
-let bossShotTimer = 48;
+let boss = { x: 0, y: 230, health: 75 };
+let bossShotTimer = 64;
 let bossDefeated = false;
 let bossAttackTimer = 150;
 let bossBullets = [];
@@ -219,6 +228,8 @@ let enemies = [];
 let fireCooldown = 0;
 let playerInvulnerable = 0;
 let invincibilitySuperTimer = 0;
+let screenShakeFrames = 0;
+let screenShakeStrength = 0;
 let enemyShotTimer = 60;
 let kills = 0;
 let superDamage = 0;
@@ -275,6 +286,7 @@ const dom = {
   damageFlash: document.getElementById("damage-flash"),
   menu: document.getElementById("menu-wrap"),
   controlsPanel: document.getElementById("controls-panel"),
+  changelogPanel: document.getElementById("changelog-panel"),
   weaponsPanel: document.getElementById("weapons-panel"),
   bossIntro: document.getElementById("boss-intro"),
   victoryScreen: document.getElementById("victory-screen"),
@@ -348,6 +360,7 @@ function activeMenuRoot() {
   if (dom.victoryScreen.classList.contains("visible")) return dom.victoryScreen;
   if (dom.bossIntro.classList.contains("visible")) return dom.bossIntro;
   if (dom.weaponsPanel.classList.contains("visible")) return dom.weaponsPanel;
+  if (dom.changelogPanel.classList.contains("visible")) return dom.changelogPanel;
   if (dom.controlsPanel.classList.contains("visible")) return dom.controlsPanel;
   if (dom.pauseScreen.classList.contains("visible")) return dom.pauseScreen;
   if (gameOverShown && dom.gameUi.classList.contains("active")) return dom.gameUi;
@@ -372,6 +385,30 @@ function closeMenuPanel(panel, trigger) {
   panel.classList.remove("visible");
   panel.setAttribute("aria-hidden", "true");
   if (trigger) trigger.focus();
+}
+
+let controlsReturnTarget = null;
+
+function openControlsPanel(trigger) {
+  controlsReturnTarget = trigger;
+  dom.controlsPanel.classList.add("visible");
+  dom.controlsPanel.setAttribute("aria-hidden", "false");
+  focusMenuDefault(dom.controlsPanel);
+}
+
+function setAudioDrawer(section, expanded) {
+  const toggle = section && section.querySelector("[data-audio-toggle]");
+  const drawer = section && section.querySelector(".audio-drawer");
+  if (!toggle || !drawer) return;
+  section.classList.toggle("expanded", expanded);
+  toggle.setAttribute("aria-expanded", String(expanded));
+  drawer.hidden = !expanded;
+  syncAudioControls();
+}
+
+function collapseAudioDrawers(root) {
+  if (!root) return;
+  root.querySelectorAll(".audio-controls.expanded").forEach((section) => setAudioDrawer(section, false));
 }
 
 function moveMenuFocus(root, code) {
@@ -435,7 +472,21 @@ function handleMenuKeydown(event) {
     }
     if (dom.controlsPanel.classList.contains("visible")) {
       event.preventDefault();
-      closeMenuPanel(dom.controlsPanel, document.getElementById("controls-btn"));
+      closeMenuPanel(dom.controlsPanel, controlsReturnTarget || document.getElementById("controls-btn"));
+      return true;
+    }
+    if (dom.changelogPanel.classList.contains("visible")) {
+      event.preventDefault();
+      closeMenuPanel(dom.changelogPanel, document.getElementById("changelog-btn"));
+      return true;
+    }
+    const root = activeMenuRoot();
+    const openAudio = root && root.querySelector(".audio-controls.expanded");
+    if (openAudio) {
+      event.preventDefault();
+      const toggle = openAudio.querySelector("[data-audio-toggle]");
+      setAudioDrawer(openAudio, false);
+      if (toggle) toggle.focus();
       return true;
     }
     if (dom.pauseScreen.classList.contains("visible")) {
@@ -443,7 +494,6 @@ function handleMenuKeydown(event) {
       setPaused(false);
       return true;
     }
-    const root = activeMenuRoot();
     if (root && !gameActive && document.activeElement !== document.body) {
       event.preventDefault();
       document.activeElement.blur();
@@ -463,6 +513,12 @@ function handleMenuKeydown(event) {
     return true;
   }
   if (!event.code.startsWith("Arrow")) return false;
+  if (dom.changelogPanel.classList.contains("visible") && (event.code === "ArrowUp" || event.code === "ArrowDown")) {
+    event.preventDefault();
+    const history = dom.changelogPanel.querySelector(".changelog-history");
+    if (history) history.scrollBy({ top: event.code === "ArrowDown" ? 80 : -80, behavior: "smooth" });
+    return true;
+  }
   if (active.matches("input[type='range']") && (event.code === "ArrowLeft" || event.code === "ArrowRight")) return true;
   if (active.matches("input[type='text']") && (event.code === "ArrowLeft" || event.code === "ArrowRight")) return true;
   event.preventDefault();
@@ -657,12 +713,33 @@ function draw(t) {
   if (!arenaRepaints) {
     ctx.fillStyle = "#000000";
     ctx.fillRect(0, 0, W, H);
+  } else if (screenShakeFrames > 0) {
+    // Prepaint the arena colour so a translated hit frame never exposes stale
+    // pixels along the viewport edge.
+    ctx.fillStyle = bossMode ? "#16051f" : "#07131a";
+    ctx.fillRect(0, 0, W, H);
   }
   centerX = W / 2;
   centerY = H / 2;
   if (!gameActive) drawStaticStars(t);
   if (gameOverShown) drawStars(t);
-  if (gameActive && !gamePaused) drawGame(t);
+  if (gameActive && !gamePaused) {
+    if (screenShakeFrames > 0) {
+      // Two decaying sine waves feel forceful without the noisy, strobing look
+      // of choosing a new random offset every frame. HUD stays fixed and legible.
+      const progress = screenShakeFrames / 14;
+      const power = screenShakeStrength * progress * progress;
+      const shakeX = Math.sin(t * 0.073) * power;
+      const shakeY = Math.cos(t * 0.097) * power * 0.62;
+      ctx.save();
+      ctx.translate(shakeX, shakeY);
+      drawGame(t);
+      ctx.restore();
+      screenShakeFrames--;
+    } else {
+      drawGame(t);
+    }
+  }
   updateChargeMeter();
   setText(dom.waveNumber, String(wave));
 }
@@ -672,8 +749,7 @@ function draw(t) {
 //
 // Three kinds, so a wave has a shape instead of a grid:
 //   grunt   — holds formation, fires the slow homing shot
-//   charger — winds up, then dashes at where the player is standing, and spits
-//             straight (non-homing) shots on the way in
+//   charger — winds up, then relentlessly homes into the player until destroyed
 //   turret  — armoured, never moves, fires a wide non-homing spread
 // Chargers and turrets are what close the old "stand in this corner and never
 // get hit" gap: one comes to you, the other fills space you aren't standing in.
@@ -873,7 +949,8 @@ function updateSuperBeam(t) {
 }
 
 // ---------------------------------------------------------------------------
-// Charge weapon: the ship visibly heats up, and catches fire at full charge.
+// Charge weapon: a contracting ring shows progress; at full charge the effects
+// drop away and the hull itself gives a small, readable vibration.
 // ---------------------------------------------------------------------------
 const CHARGE_FULL_MS = 2500;
 
@@ -884,47 +961,17 @@ function chargeRatio() {
 
 function drawChargeAura(t) {
   const ratio = chargeRatio();
-  if (ratio <= 0) return;
-  const full = ratio >= 1;
+  if (ratio <= 0 || ratio >= 1) return;
   const radius = (player.shrunk ? 22 : 32) * (1.35 - ratio * 0.35);
-  const pulse = Math.sin(t * (full ? 0.03 : 0.012)) * (full ? 3 : 1.5);
+  const pulse = Math.sin(t * 0.012) * 1.5;
   const color = playerColor;
 
-  // gathering ring
+  // A restrained gathering ring; no orbiting embers or flame cloud.
   ctx.strokeStyle = color;
-  ctx.globalAlpha = 0.35 + ratio * 0.5;
-  ctx.lineWidth = 2 + ratio * 2;
+  ctx.globalAlpha = 0.24 + ratio * 0.46;
+  ctx.lineWidth = 2 + ratio;
   ctx.beginPath(); ctx.arc(player.x, player.y, radius + pulse, 0, Math.PI * 2); ctx.stroke();
   ctx.globalAlpha = 1;
-  drawGlow(color, Math.round(18 + ratio * 22), player.x, player.y);
-
-  // embers spiral inward the whole time; at full charge the ship is alight
-  const emberCount = full ? 3 : ratio > 0.5 ? 1 : 0;
-  for (let i = 0; i < emberCount; i++) {
-    const a = rand(0, Math.PI * 2);
-    const r = radius + rand(6, 20);
-    spawnSparks(player.x + Math.cos(a) * r, player.y + Math.sin(a) * r, 1,
-      full && Math.random() < 0.35 ? "#ffffff" : playerColor,
-      { angle: a + Math.PI, spread: 0.4, minSpeed: 0.8, maxSpeed: 2.2, life: 22, drag: 0.9 });
-  }
-  if (full) {
-    // flame tongues licking off the hull
-    const flames = 5;
-    ctx.globalCompositeOperation = "lighter";
-    for (let i = 0; i < flames; i++) {
-      const a = (i / flames) * Math.PI * 2 + t * 0.006;
-      const wobble = 1 + Math.sin(t * 0.05 + i) * 0.35;
-      const fx = player.x + Math.cos(a) * radius * 0.8;
-      const fy = player.y + Math.sin(a) * radius * 0.8;
-      ctx.fillStyle = i % 2 ? playerColor : "#ffffff";
-      ctx.globalAlpha = i % 2 ? 0.5 : 0.38;
-      ctx.beginPath();
-      ctx.ellipse(fx, fy, 7 * wobble, 12 * wobble, a + Math.PI / 2, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.globalAlpha = 1;
-    ctx.globalCompositeOperation = "source-over";
-  }
 }
 
 // A slow shot that steers toward the player for a limited window and then
@@ -943,8 +990,8 @@ function fireHomingShot(x, y, speed) {
   });
 }
 
-// Dumb-fire: aimed once, then straight forever. Chargers and turrets use these,
-// so there is always something on screen that cannot be walked away from.
+// Dumb-fire: aimed once, then straight forever. Turrets use these, so there is
+// always something on screen that cannot be walked away from.
 function fireStraightShot(x, y, angle, speed) {
   enemyBullets.push({
     x, y,
@@ -1002,6 +1049,8 @@ function updateEnemyBullets() {
 function hurtPlayer() {
   lives--;
   flashDamage();
+  screenShakeFrames = 14;
+  screenShakeStrength = 8;
   playerInvulnerable = 90;
   setLives(lives);
   playSound(120, 0.25, "sawtooth");
@@ -1048,10 +1097,10 @@ function drawGame(t) {
   if (fireCooldown <= 0 && aim.held) {
     if (selectedWeapon === "cone") {
       fireCone(aimX, aimY);
-      fireCooldown = 18;
+      fireCooldown = player.shrunk ? 54 : 18;
     } else if (selectedWeapon === "blaster") {
       fireInDirection(aimX, aimY);
-      fireCooldown = 10;
+      fireCooldown = player.shrunk ? 30 : 10;
     }
   }
 
@@ -1126,8 +1175,8 @@ function drawGame(t) {
 
   enemyShotTimer--;
   if (enemyShotTimer <= 0) {
-    // Only grunts use the shared homing shot; turrets and chargers fire on
-    // their own timers. Counting first avoids allocating a list of candidates.
+    // Only grunts use the shared homing shot; turrets fire on their own timers
+    // and chargers are now pure contact threats. Counting first avoids a list.
     let livingCount = 0;
     for (const enemy of enemies) if (enemy.alive && enemy.type === "grunt") livingCount++;
     if (livingCount) {
@@ -1161,7 +1210,10 @@ function drawGame(t) {
     for (const bullet of bullets) {
       if (Math.abs(bullet.x - enemy.x) < enemy.w + 4 && Math.abs(bullet.y - ey) < enemy.h + 6) {
         damageEnemy(enemy, bullet.damage || 1);
-        if (!bullet.piercing) bullet.y = -100;
+        if (bullet.pierceRemaining !== Infinity) {
+          bullet.pierceRemaining--;
+          if (bullet.pierceRemaining <= 0) bullet.y = -100;
+        }
         break;
       }
     }
@@ -1234,13 +1286,15 @@ function updateEnemy(enemy, time) {
   }
 
   // --- charger ------------------------------------------------------------
+  // One readable wind-up, then continuous pursuit. It never fires and never
+  // retreats to formation; the player has to destroy it or keep evading it.
   enemy.timer--;
   if (enemy.state === "idle") {
     enemy.x += (enemy.homeX - enemy.x) * 0.03;
     enemy.y += (enemy.homeY - enemy.y) * 0.03 + Math.sin(time * 2.4 + enemy.phase) * 0.3;
     if (enemy.timer <= 0) {
       enemy.state = "wind";
-      enemy.timer = 46;
+      enemy.timer = 42;
       playSound(90, 0.18, "sawtooth");
     }
   } else if (enemy.state === "wind") {
@@ -1249,32 +1303,30 @@ function updateEnemy(enemy, time) {
     enemy.aimY = Math.sin(aim);
     enemy.x -= enemy.aimX * 0.7;   // rears back before the lunge
     enemy.y -= enemy.aimY * 0.7;
-    if (enemy.timer === 30 || enemy.timer === 12) fireStraightShot(enemy.x, enemy.y, aim, 4);
     if (enemy.timer <= 0) {
-      enemy.state = "dash";
-      enemy.timer = 68;
-      enemy.vx = enemy.aimX * 7.6;
-      enemy.vy = enemy.aimY * 7.6;
+      enemy.state = "hunt";
+      enemy.vx = enemy.aimX * 4.6;
+      enemy.vy = enemy.aimY * 4.6;
       playSound(240, 0.14, "sawtooth");
     }
-  } else if (enemy.state === "dash") {
+  } else {
+    const targetAngle = Math.atan2(player.y - enemy.y, player.x - enemy.x);
+    const currentAngle = Math.atan2(enemy.vy, enemy.vx);
+    let angleDiff = targetAngle - currentAngle;
+    angleDiff = Math.atan2(Math.sin(angleDiff), Math.cos(angleDiff));
+    const nextAngle = currentAngle + Math.max(-0.047, Math.min(0.047, angleDiff));
+    const speed = 4.6;
+    enemy.aimX = Math.cos(nextAngle);
+    enemy.aimY = Math.sin(nextAngle);
+    enemy.vx = enemy.aimX * speed;
+    enemy.vy = enemy.aimY * speed;
     enemy.x += enemy.vx;
     enemy.y += enemy.vy;
-    enemy.vx *= 0.985;
-    enemy.vy *= 0.985;
-    if (enemy.x < 20 || enemy.x > W - 20) enemy.vx *= -1;
-    if (enemy.y < 40 || enemy.y > H - 30) enemy.vy *= -1;
+    // Keep the whole target visible at the arena edge while its steering turns
+    // it back toward the ship; hard bounces made pursuit look erratic.
     enemy.x = Math.max(20, Math.min(W - 20, enemy.x));
     enemy.y = Math.max(40, Math.min(H - 30, enemy.y));
-    if (Math.random() < 0.5) spawnSparks(enemy.x - enemy.vx * 2, enemy.y - enemy.vy * 2, 1, "#ff9f5a");
-    if (enemy.timer <= 0) { enemy.state = "return"; enemy.timer = 150; }
-  } else {
-    enemy.x += (enemy.homeX - enemy.x) * 0.045;
-    enemy.y += (enemy.homeY - enemy.y) * 0.045;
-    if (enemy.timer <= 0 || Math.hypot(enemy.homeX - enemy.x, enemy.homeY - enemy.y) < 12) {
-      enemy.state = "idle";
-      enemy.timer = Math.round(rand(110, 220));
-    }
+    if (Math.random() < 0.42) spawnSparks(enemy.x - enemy.vx * 2, enemy.y - enemy.vy * 2, 1, "#ff9f5a");
   }
   return enemy.y;
 }
@@ -1333,14 +1385,14 @@ function drawEnemy(enemy, ey, time) {
 
   // charger: an arrowhead that always points where it is about to go
   const winding = enemy.state === "wind";
-  const dashing = enemy.state === "dash";
-  const angle = dashing
+  const hunting = enemy.state === "hunt";
+  const angle = hunting
     ? Math.atan2(enemy.vy, enemy.vx)
     : Math.atan2(enemy.aimY || 1, enemy.aimX || 0);
   ctx.save();
   ctx.translate(enemy.x, ey);
   ctx.rotate(angle + Math.PI / 2);
-  if (dashing) {
+  if (hunting) {
     ctx.fillStyle = "rgba(255, 150, 60, 0.55)";
     ctx.beginPath();
     ctx.moveTo(-7, 6); ctx.lineTo(0, 26 + Math.sin(time * 40) * 6); ctx.lineTo(7, 6);
@@ -1372,9 +1424,9 @@ function enterBossArea() {
   bossMode = false;
   bossIntro = true;
   bossDefeated = false;
-  boss = { x: W / 2, y: 180, health: BOSS_MAX_HEALTH };
+  boss = { x: W / 2, y: Math.max(215, Math.min(250, H * 0.35)), health: BOSS_MAX_HEALTH };
   resetBossAnimation();
-  bossShotTimer = 48;
+  bossShotTimer = 64;
   bossAttackTimer = 150;
   bossBullets = [];
   document.getElementById("boss-health").classList.add("visible");
@@ -1407,7 +1459,7 @@ function resetBossAnimation() {
   bossBlink = 0;
   bossBlinkTimer = 200;
   bossDrift = 0;
-  bossBurstTimer = 480;
+  bossBurstTimer = Math.round(rand(450, 600));
 }
 
 // Rock knocked loose by damage, kept in orbit around the planet. Each shard has
@@ -1475,7 +1527,6 @@ let shadeGradient = null;
 let auraGradient = null;
 let auraGradientRadius = 0;
 let auraGradientColor = "";
-const mouthGradients = [null, null];
 
 // Fixed surface features, so Mercury reads as the same rock every frame while
 // the whole crater field rotates slowly under the clip.
@@ -1870,32 +1921,51 @@ function drawMercury(t) {
     ctx.fill();
   }
 
-  // mouth: frown at rest, puckers on the wind-up, gapes on the shot
-  const mouthOpen = shoot * 22 + charge * 9;
-  if (mouthOpen > 1.5) {
-    // Two fixed variants (winding up vs. firing), built on first use.
-    const winding = charge > 0.05 && shoot === 0;
-    if (!mouthGradients[winding ? 1 : 0]) {
-      const gradient = ctx.createRadialGradient(0, 32, 2, 0, 32, 34);
-      gradient.addColorStop(0, winding ? "#ffd07a" : "#ffe9a8");
-      gradient.addColorStop(0.5, "#ff6a2c");
-      gradient.addColorStop(1, "#160606");
-      mouthGradients[winding ? 1 : 0] = gradient;
-    }
-    ctx.fillStyle = mouthGradients[winding ? 1 : 0];
+  // Mouth has three explicit poses: a clean frown, clenched charge-up, then a
+  // dark open mouth with upper/lower teeth and a muzzle flash at shot release.
+  const mouthY = 35;
+  if (shoot > 0.04) {
+    const mouthOpen = 9 + shoot * 14;
+    ctx.fillStyle = "#16080a";
     ctx.beginPath();
-    ctx.ellipse(0, 32, 18 + mouthOpen * 0.6, mouthOpen * 1.05, 0, 0, Math.PI * 2);
+    ctx.ellipse(0, mouthY, 20 + shoot * 6, mouthOpen, 0, 0, Math.PI * 2);
     ctx.fill();
-    // teeth, so an open mouth reads as a mouth and not a fireball
+    ctx.globalAlpha = 0.28 + shoot * 0.48;
+    ctx.fillStyle = "#ff6a2c";
+    ctx.beginPath();
+    ctx.ellipse(0, mouthY + mouthOpen * 0.28, 10 + shoot * 4, 5 + shoot * 4, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
     ctx.fillStyle = "#f4ead8";
-    const bite = Math.min(7, mouthOpen * 0.4);
+    const top = mouthY - mouthOpen * 0.78;
+    const bottom = mouthY + mouthOpen * 0.78;
+    const tooth = Math.min(7, mouthOpen * 0.34);
     for (let i = -2; i <= 2; i++) {
+      const x = i * 8;
       ctx.beginPath();
-      ctx.moveTo(i * 9 - 4, 32 - mouthOpen * 1.05);
-      ctx.lineTo(i * 9 + 4, 32 - mouthOpen * 1.05);
-      ctx.lineTo(i * 9, 32 - mouthOpen * 1.05 + bite);
+      ctx.moveTo(x - 3.3, top); ctx.lineTo(x + 3.3, top); ctx.lineTo(x, top + tooth);
+      ctx.closePath(); ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(x - 3.3, bottom); ctx.lineTo(x + 3.3, bottom); ctx.lineTo(x, bottom - tooth);
       ctx.closePath(); ctx.fill();
     }
+    if (shoot > 0.62) {
+      drawGlow("#ff8a32", 18, 0, mouthY + mouthOpen * 0.45);
+      ctx.fillStyle = "#fff2c9";
+      ctx.beginPath(); ctx.arc(0, mouthY + mouthOpen * 0.45, 4 + shoot * 2, 0, Math.PI * 2); ctx.fill();
+    }
+  } else if (charge > 0.05) {
+    const clench = 5 + charge * 2;
+    ctx.fillStyle = "#171719";
+    ctx.beginPath(); ctx.ellipse(0, mouthY, 23, clench + 2, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#f2eee5";
+    ctx.fillRect(-20, mouthY - clench, 40, clench * 2);
+    ctx.strokeStyle = "#77736d";
+    ctx.lineWidth = 1.5;
+    for (let x = -12; x <= 12; x += 8) {
+      ctx.beginPath(); ctx.moveTo(x, mouthY - clench); ctx.lineTo(x, mouthY + clench); ctx.stroke();
+    }
+    ctx.beginPath(); ctx.moveTo(-20, mouthY); ctx.lineTo(20, mouthY); ctx.stroke();
   } else {
     ctx.strokeStyle = "#171717";
     ctx.lineWidth = 6;
@@ -1922,6 +1992,21 @@ function drawMercury(t) {
   if (bossShootAnim > 0) bossShootAnim--;
 }
 
+function trackedBossAngle(fromX, fromY, leadFrames) {
+  const targetX = Math.max(24, Math.min(W - 24, player.x + player.vx * leadFrames));
+  const targetY = Math.max(28, Math.min(H - 28, player.y + player.vy * leadFrames));
+  return Math.atan2(targetY - fromY, targetX - fromX);
+}
+
+function pushBossOrb(angle, speed) {
+  bossBullets.push({
+    x: boss.x,
+    y: boss.y + 60,
+    vx: Math.cos(angle) * speed,
+    vy: Math.sin(angle) * speed,
+  });
+}
+
 function drawBossArea(t) {
   ctx.fillStyle = "#16051f"; ctx.fillRect(0, 0, W, H);
   ctx.save();
@@ -1945,10 +2030,10 @@ function drawBossArea(t) {
   if (!bossDying) {
     // Mercury sweeps the arena and leans toward the player. A stationary boss is
     // what made "stand here and never get hit" possible in the first place.
-    bossDrift += 0.0052;
-    const range = Math.min(250, W * 0.22);
-    const target = W / 2 + Math.sin(bossDrift) * range + (player.x - W / 2) * 0.12;
-    boss.x += (target - boss.x) * 0.016;
+    bossDrift += 0.0048;
+    const range = Math.min(220, W * 0.2);
+    const target = W / 2 + Math.sin(bossDrift) * range + (player.x - W / 2) * 0.28;
+    boss.x += (target - boss.x) * 0.022;
     boss.x = Math.max(120, Math.min(W - 120, boss.x));
 
     // molten embers rise off the cracks once it is properly hurt
@@ -1967,15 +2052,17 @@ function drawBossArea(t) {
       playSound(60, 0.4, "triangle");
     }
     if (bossBurstTimer <= 0) {
-      for (let i = 0; i < 8; i++) {
-        const a = (i / 8) * Math.PI * 2 + rand(-0.05, 0.05);
+      const count = Math.round(rand(7, 11));
+      const phase = rand(0, Math.PI * 2);
+      for (let i = 0; i < count; i++) {
+        const a = phase + (i / count) * Math.PI * 2 + rand(-0.045, 0.045);
         bossBullets.push({ x: boss.x, y: boss.y, vx: Math.cos(a) * 2.4, vy: Math.sin(a) * 2.4 });
       }
       bossShootAnim = BOSS_SHOOT_FRAMES;
       bossShakeTimer = Math.max(bossShakeTimer, 10);
       bossExplosions.push({ x: boss.x, y: boss.y, r: 0, max: 150, life: 20, maxLife: 20 });
       playSound(140, 0.35, "sawtooth");
-      bossBurstTimer = 540;
+      bossBurstTimer = Math.round(rand(450, 650));
     }
 
     bossShotTimer--;
@@ -1985,15 +2072,30 @@ function drawBossArea(t) {
     }
     if (bossChargeAnim > 0) bossChargeAnim--;
     if (bossShotTimer <= 0) {
-      const angle = Math.atan2(player.y - boss.y, player.x - boss.x);
-      enemyBullets.push({ x: boss.x, y: boss.y + 70, vx: Math.cos(angle) * 3.7, vy: Math.sin(angle) * 3.7, speed: 3.7, turnRate: 0.022, homing: 90, kind: "meteor" });
+      const angle = trackedBossAngle(boss.x, boss.y + 70, 18);
+      const pattern = Math.random();
+      const offsets = pattern < 0.56 ? [0] : pattern < 0.82 ? [-0.14, 0.14] : [-0.16, 0, 0.16];
+      const speed = pattern < 0.82 ? 3.6 : 4.15;
+      for (const offset of offsets) {
+        const shotAngle = angle + offset;
+        enemyBullets.push({
+          x: boss.x,
+          y: boss.y + 70,
+          vx: Math.cos(shotAngle) * speed,
+          vy: Math.sin(shotAngle) * speed,
+          speed,
+          turnRate: pattern < 0.56 ? 0.026 : pattern < 0.82 ? 0.018 : 0,
+          homing: pattern < 0.56 ? 105 : pattern < 0.82 ? 60 : 0,
+          kind: "meteor",
+        });
+      }
       bossShootAnim = BOSS_SHOOT_FRAMES;
       bossChargeAnim = 0;
       spawnBossParticles(10, {
         x: boss.x, y: boss.y + 34, angle, spread: 0.5, minSpeed: 1, maxSpeed: 3.6,
         minSize: 2, maxSize: 4, life: 20, colors: ["#ffdc5a", "#ff8a32", "#fff3c4"],
       });
-      bossShotTimer = 36;
+      bossShotTimer = Math.round(rand(48, 94));
     }
   }
 
@@ -2083,12 +2185,15 @@ function drawBossArea(t) {
       playSound(70, 0.22, "triangle");
     }
     if (bossAttackTimer <= 0) {
-      const baseAngle = Math.atan2(player.y - boss.y, player.x - boss.x);
-      bossBullets.push(
-        { x: boss.x, y: boss.y + 60, vx: Math.cos(baseAngle - 0.34) * 3.5, vy: Math.sin(baseAngle - 0.34) * 3.5 },
-        { x: boss.x, y: boss.y + 60, vx: Math.cos(baseAngle) * 3.5, vy: Math.sin(baseAngle) * 3.5 },
-        { x: boss.x, y: boss.y + 60, vx: Math.cos(baseAngle + 0.34) * 3.5, vy: Math.sin(baseAngle + 0.34) * 3.5 }
-      );
+      const baseAngle = trackedBossAngle(boss.x, boss.y + 60, 26);
+      const pattern = Math.random();
+      if (pattern < 0.45) {
+        for (const offset of [-0.32, 0, 0.32]) pushBossOrb(baseAngle + offset, 3.5);
+      } else if (pattern < 0.8) {
+        for (const offset of [-0.48, -0.24, 0, 0.24, 0.48]) pushBossOrb(baseAngle + offset, 3.05);
+      } else {
+        for (const offset of [-0.12, 0.12]) pushBossOrb(baseAngle + offset, 4.2);
+      }
       bossShootAnim = BOSS_SHOOT_FRAMES;
       bossChargeAnim = 0;
       bossShakeTimer = Math.max(bossShakeTimer, 5);
@@ -2097,7 +2202,7 @@ function drawBossArea(t) {
         minSize: 2, maxSize: 5, life: 26, colors: ["#ffdc5a", "#ff8a32", "#fff3c4"],
       });
       playSound(220, 0.15, "sawtooth");
-      bossAttackTimer = 220;
+      bossAttackTimer = Math.round(rand(175, 290));
     }
   }
 
@@ -2170,36 +2275,41 @@ function drawTestRoom() {
   drawPlayer();
 }
 
-function drawSuperReadyAura() {
-  if (superMeter < 1) return;
-  const now = performance.now();
-  const baseRadius = player.shrunk ? 25 : 40;
-  const pulse = 0.72 + Math.sin(now * 0.008) * 0.18;
-  const orbit = now * 0.0018;
-
-  ctx.save();
-  ctx.globalAlpha = pulse;
-  drawGlow(playerColor, player.shrunk ? 38 : 54, player.x, player.y);
-  ctx.strokeStyle = playerColor;
-  ctx.lineWidth = 3;
-  ctx.beginPath();
-  ctx.arc(player.x, player.y, baseRadius + Math.sin(now * 0.012) * 3, orbit, orbit + Math.PI * 1.45);
-  ctx.stroke();
-  ctx.globalAlpha = 0.9;
-  for (let i = 0; i < 4; i++) {
-    const angle = orbit + i * Math.PI / 2;
-    const radius = baseRadius + 7;
-    ctx.fillStyle = i % 2 ? "#ffffff" : playerColor;
-    ctx.fillRect(Math.round(player.x + Math.cos(angle) * radius) - 2, Math.round(player.y + Math.sin(angle) * radius) - 2, 4, 4);
-  }
-  ctx.restore();
-}
-
 function drawPlayer() {
   const scale = player.shrunk ? 0.55 : 1;
-  drawSuperReadyAura();
-  ctx.save(); ctx.translate(player.x, player.y); ctx.scale(scale, scale); ctx.rotate(Math.atan2(facing.y, facing.x) + Math.PI / 2);
-  ctx.fillStyle = playerColor; ctx.beginPath(); ctx.moveTo(0, -20); ctx.lineTo(-18, 16); ctx.lineTo(0, 9); ctx.lineTo(18, 16); ctx.closePath(); ctx.fill(); ctx.restore();
+  const now = performance.now();
+  const chargeReady = selectedWeapon === "charge" && chargeRatio() >= 1;
+  const chargeShakeX = chargeReady ? Math.sin(now * 0.19) * 1.25 : 0;
+  const chargeShakeY = chargeReady ? Math.cos(now * 0.23) * 0.7 : 0;
+  ctx.save();
+  ctx.translate(player.x + chargeShakeX, player.y + chargeShakeY);
+  ctx.scale(scale, scale);
+  ctx.rotate(Math.atan2(facing.y, facing.x) + Math.PI / 2);
+  if (superMeter >= 1) {
+    // Trace the hull itself: a thick neon edge and tightly contained softness,
+    // never a circular lantern aura around the player.
+    const pulse = 0.92 + Math.sin(now * 0.01) * 0.08;
+    ctx.globalCompositeOperation = "lighter";
+    ctx.strokeStyle = playerColor;
+    ctx.lineJoin = "round";
+    ctx.globalAlpha = 0.18 * pulse;
+    ctx.lineWidth = 12;
+    ctx.stroke(PLAYER_HULL);
+    ctx.globalAlpha = 0.52 * pulse;
+    ctx.lineWidth = 7;
+    ctx.stroke(PLAYER_HULL);
+    ctx.globalAlpha = pulse;
+    ctx.lineWidth = 4.5;
+    ctx.shadowColor = playerColor;
+    ctx.shadowBlur = 4;
+    ctx.stroke(PLAYER_HULL);
+    ctx.shadowBlur = 0;
+    ctx.globalCompositeOperation = "source-over";
+    ctx.globalAlpha = 1;
+  }
+  ctx.fillStyle = playerColor;
+  ctx.fill(PLAYER_HULL);
+  ctx.restore();
   if (playerInvulnerable > 0) { ctx.strokeStyle = "rgba(255,255,255,.7)"; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(player.x, player.y, player.shrunk ? 24 : 34, 0, Math.PI * 2); ctx.stroke(); }
   if (invincibilitySuperTimer > 0) {
     const radius = player.shrunk ? 29 : 42;
@@ -2267,6 +2377,8 @@ function startGame() {
   fireCooldown = 0;
   playerInvulnerable = 0;
   invincibilitySuperTimer = 0;
+  screenShakeFrames = 0;
+  screenShakeStrength = 0;
   enemyShotTimer = 60;
   player.x = W / 2;
   player.y = H - 80;
@@ -2349,7 +2461,10 @@ function setPaused(paused) {
   dom.pauseScreen.setAttribute("aria-hidden", String(!paused));
   setText(dom.gameMessage, "");
   music.setDucked(paused);
-  if (paused) focusMenuDefault(dom.pauseScreen);
+  if (paused) {
+    collapseAudioDrawers(dom.pauseScreen);
+    focusMenuDefault(dom.pauseScreen);
+  }
   else if (dom.pauseScreen.contains(document.activeElement)) document.activeElement.blur();
 }
 
@@ -2797,14 +2912,17 @@ function currentAimVector() {
   return aimVector;
 }
 
-function fireInDirection(dx, dy, damage = player.shrunk ? 0.5 : 1, type = "basic", size = 3) {
+function fireInDirection(dx, dy, damage = 1, type = "basic", size = 3) {
   if (!gameActive || bullets.length >= 10) return;
   const length = Math.hypot(dx, dy) || 1;
   dx /= length;
   dy /= length;
   facing.x = dx;
   facing.y = dy;
-  bullets.push({ x: player.x, y: player.y, vx: dx * 10, vy: dy * 10, damage, type, size, piercing: damage > 1 });
+  const pierceRemaining = type === "charge" && damage >= 5 ? Infinity
+    : type === "charge" && damage >= 3 ? 3
+    : 1;
+  bullets.push({ x: player.x, y: player.y, vx: dx * 10, vy: dy * 10, damage, type, size, pierceRemaining });
 }
 
 let chargeMeterShown = false;
@@ -2846,7 +2964,7 @@ function fireCone(dx, dy) {
   const base = Math.atan2(dy, dx);
   for (const offset of CONE_ANGLES) {
     const angle = base + offset;
-    fireInDirection(Math.cos(angle), Math.sin(angle), player.shrunk ? 0.5 : 1, "cone");
+    fireInDirection(Math.cos(angle), Math.sin(angle), 1, "cone");
   }
   // after the shots, so it isn't left pointing along the last cone arm
   facing.x = dx;
@@ -2967,10 +3085,18 @@ document.getElementById("admin-submit").addEventListener("click", function () {
   }
 });
 document.getElementById("controls-btn").addEventListener("click", function () {
-  const panel = document.getElementById("controls-panel");
-  panel.classList.add("visible");
-  panel.setAttribute("aria-hidden", "false");
-  focusMenuDefault(panel);
+  openControlsPanel(this);
+});
+document.getElementById("pause-controls-btn").addEventListener("click", function () {
+  openControlsPanel(this);
+});
+document.getElementById("changelog-btn").addEventListener("click", function () {
+  dom.changelogPanel.classList.add("visible");
+  dom.changelogPanel.setAttribute("aria-hidden", "false");
+  focusMenuDefault(dom.changelogPanel);
+});
+document.getElementById("changelog-close").addEventListener("click", function () {
+  closeMenuPanel(dom.changelogPanel, document.getElementById("changelog-btn"));
 });
 document.querySelectorAll(".color-choice").forEach((choice) => choice.addEventListener("click", function () {
   playerColor = choice.dataset.color;
@@ -2980,7 +3106,7 @@ document.querySelectorAll(".color-choice").forEach((choice) => choice.addEventLi
   playSound(760, 0.07, "square");
 }));
 document.getElementById("controls-close").addEventListener("click", function () {
-  closeMenuPanel(dom.controlsPanel, document.getElementById("controls-btn"));
+  closeMenuPanel(dom.controlsPanel, controlsReturnTarget || document.getElementById("controls-btn"));
 });
 document.getElementById("weapons-btn").addEventListener("click", function () {
   const panel = document.getElementById("weapons-panel");
@@ -2992,6 +3118,10 @@ document.getElementById("weapons-close").addEventListener("click", function () {
   closeMenuPanel(dom.weaponsPanel, document.getElementById("weapons-btn"));
 });
 
+document.querySelectorAll("[data-audio-toggle]").forEach((toggle) => toggle.addEventListener("click", function () {
+  const section = toggle.closest(".audio-controls");
+  setAudioDrawer(section, !section.classList.contains("expanded"));
+}));
 document.querySelectorAll("[data-audio-control]").forEach((input) => input.addEventListener("input", function () {
   audioSettings[input.dataset.audioControl] = Number(input.value) / 100;
   applyAudioMix();
@@ -3041,7 +3171,7 @@ window.addEventListener("keydown", function (e) {
       // Don't fire here — a diagonal is two separate keydowns, so firing on the
       // event shot once per axis. Just clear the cooldown; drawGame() fires on
       // the next frame using the combined direction.
-      fireCooldown = 0;
+      if (!player.shrunk || fireCooldown <= 0) fireCooldown = 0;
     }
   }
   if (gameActive && e.code === "Escape") {
@@ -3083,9 +3213,13 @@ window.addEventListener("keyup", function (e) {
     const shotY = Math.max(-1, Math.min(1, (keys.ArrowDown ? 1 : 0) - (keys.ArrowUp ? 1 : 0) + released[1]));
     const dirX = shotX || shotY ? shotX : chargeDirection.x;
     const dirY = shotX || shotY ? shotY : chargeDirection.y;
-    const damage = Math.min(5, Math.max(1, Math.ceil((performance.now() - chargeStartedAt) / 500)));
-    const size = Math.min(9, 3 + Math.floor((performance.now() - chargeStartedAt) / 350));
-    fireInDirection(dirX, dirY, damage, "charge", size);
+    const held = performance.now() - chargeStartedAt;
+    const damage = held >= CHARGE_FULL_MS ? 5 : held >= CHARGE_FULL_MS * 0.5 ? 3 : 1;
+    const size = damage === 5 ? 9 : damage === 3 ? 6 : 3;
+    if (!player.shrunk || fireCooldown <= 0) {
+      fireInDirection(dirX, dirY, damage, "charge", size);
+      if (player.shrunk) fireCooldown = 45;
+    }
     lastArrowDirection.x = dirX;
     lastArrowDirection.y = dirY;
     const stillHeld = keys.ArrowLeft || keys.ArrowRight || keys.ArrowUp || keys.ArrowDown;
