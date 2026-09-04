@@ -103,6 +103,8 @@ goes stale and silently swallows the next real write.
 6. On defeat: `startBossDeath()` runs a ~175-frame sequence — chained surface blasts,
    then one big detonation at frame 126 that scatters debris — before `finishBossDeath()`
    grants `+1 HP`, sets `wave = 6` and opens `showVictory()`.
+7. Continuing enters Venus airspace for waves 6–9. Wave 10 still uses placeholder wave logic;
+   no Venus boss encounter has been implemented yet.
 
 ### Mercury
 
@@ -136,16 +138,21 @@ and `bossExplosions` (expanding rings) are the shared effect pools.
 
 ## Enemies
 
-Three types, defined in `ENEMY_TYPES` and driven by `updateEnemy()` / `drawEnemy()`:
+Five types, defined in `ENEMY_TYPES` and driven by `updateEnemy()` / `drawEnemy()`:
 
 | Type | HP | Behaviour |
 | --- | --- | --- |
 | `grunt` | 1 | Holds formation, bobs. Fires the shared slow **homing** shot on `enemyShotTimer`. |
 | `charger` | 2 | `idle → wind → hunt` state machine. Telegraphs with a red ring, then continuously steers into the player until destroyed. It is a pure contact threat and fires no projectiles. |
 | `turret` | 3 | Never moves. Barrel tracks the player; fires a three-way **straight** spread. |
+| `skimmer` | 2 | Venus Acid Skimmer. Sways across a formation lane, tracks the player, then spits a wobbling sulfur-acid globule. |
+| `bloom` | 4 | Venus Furnace Bloom. Opens with a hot pulse and fires a wide radial fan of heat shards. |
 
-`waveRoster(n)` decides the mix (wave 2 introduces chargers, wave 3 turrets, wave 4 both);
-`WAVE_INTROS` supplies the banner subtitle that calls out what's new.
+`waveRoster(n)` decides the mix (wave 2 introduces chargers, wave 3 turrets, wave 4 both,
+and waves 6–9 replace Mercury's forces with increasingly dense Venus formations);
+`WAVE_INTROS` supplies the banner subtitle that calls out what's new. `drawVenusEnvironment()`
+fills post-Mercury waves with drifting sulfur banks and heat lanes without introducing the
+future Venus boss.
 
 **Why the mix matters:** the old game had only grunts firing bullets that homed forever but
 only while `y < H`, so a player could park in a corner and never be touched. Chargers come to
@@ -158,11 +165,18 @@ Primary weapon (`selectedWeapon`):
 - `blaster` — auto-fires on held arrow keys, `fireCooldown = 10`, 1 damage.
 - `charge` — hold an arrow, release to fire. It has three discrete tiers: 1 damage below half,
   3 damage at half charge with a three-target cap, and 5 damage at full charge with infinite
-  pierce. Charge state lives in `chargeStartedAt` / `chargeDirection`.
-- `cone` — three 1-damage shots at ±0.16 rad, `fireCooldown = 18`.
+  pierce. Each tier is a circular energy ball (5px / 9px / 14px radius) so charge strength is
+  visible in flight. Charge state lives in `chargeStartedAt` / `chargeDirection`.
+- `cone` — three 1-damage shots at ±0.16 rad, `fireCooldown = 18`. `fireCone()` reserves
+  capacity for the entire volley before firing, so the projectile cap can never emit a partial burst.
+- `tech0` — a cyan post-Mercury reward with a 60-frame (one-second) firing cycle. The projectile
+  deals 3 damage on direct impact, then walks a 0.5-damage chain through as many as four
+  additional living enemies within 230px of each previous target. Multiple projectiles are no
+  longer blocked by an active arc.
 
-Below full charge, `drawChargeAura()` shows a contracting ring. At full charge the ring clears
-and `drawPlayer()` applies only a subtle hull shake; the full-power round keeps its flame trail.
+While charging, `drawChargeAura()` pulls segmented orange energy arcs toward the ship. At full
+charge the arcs ignite into a tighter orbit while `drawPlayer()` applies a subtle hull shake;
+the full-power round draws a two-layer flame tail and leaves hot ember particles.
 
 Super (`selectedSuper`), fired by a **short** Space tap when `superMeter >= 1`:
 - `bomb` — projectile with a 125px blast radius (15 damage to the boss). `bombBlasts` keeps its
@@ -179,7 +193,9 @@ mid-game swap.
 
 When the meter is full, `drawPlayer()` adds a tight, pulsing neon outline directly around the
 cached `PLAYER_HULL` path in the selected super's color. `WEAPON_COLORS` and `SUPER_COLORS`
-give every player attack a stable palette; the hull and general menu chrome still use `playerColor`.
+give every player attack a stable palette: yellow Blaster, orange Charge, green Cone, blue Bomb,
+yellow Shield, purple Technology, and cyan Tech.0. The hull and general menu chrome still use
+`playerColor`.
 
 ## Input
 
@@ -228,8 +244,10 @@ Typed into the ADMIN CODE box on the menu (`admin-submit` handler):
   in `localStorage` and applied to the WebAudio buses without restarting the active track.
 - **Change log.** The bottom-left `CHANGE LOG 0.1` button opens a scrollable version-history panel.
   Add each shipped release as a new retained entry so older notes remain available; do not invent old releases.
-- **Mercury defeat.** Losing during `bossMode` opens `#mercury-defeat-screen` with a looping laugh
-  portrait, Mercury's quote, and dedicated retry/menu actions instead of the generic game-over UI.
+- **Mercury defeat.** Losing during `bossMode` opens `#mercury-defeat-screen` with a sinister,
+  red-eyed looping laugh portrait, Mercury's quote, and dedicated retry/menu actions instead of
+  the generic game-over UI. The defeated-Mercury victory portrait keeps its tongue extended and
+  gently retracts it on a short loop, like panting.
 
 ## Music
 
@@ -251,6 +269,16 @@ the weapons panel tiles (split into PRIMARY GUN / SUPER ATTACK sections, each sh
 EQUIPPED flag on the active tile), the victory-screen choices, and the loadout readouts on the
 menu button and panel footer. Nothing else touches the `.selected` class; go through
 `setSelectedWeapon()` / `setSelectedSuper()`.
+
+The first three primaries stay in the fixed grid. `primary-more-toggle` expands
+`extra-primary-guns`, which currently contains Tech.0 and keeps added primaries from widening the
+panel beyond the viewport. Opening the panel auto-expands the section when Tech.0 is equipped.
+
+Mercury progression is stored under `petros-space-adventure-mercury-rewards`. Before the first
+victory, the Grey ship swatch and Tech.0 tiles remain visibly locked and open the Mercury reward
+prompt when selected. `showVictory()` calls `unlockMercuryRewards()` before painting the victory
+loadout, so Tech.0 can be equipped immediately on that screen and both rewards stay available on
+future visits.
 
 ## Conventions
 

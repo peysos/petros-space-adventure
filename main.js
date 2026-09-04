@@ -193,8 +193,8 @@ let bossMode = false;
 let bossIntro = false;
 let playerName = "PLAYER";
 let playerColor = "#7ef9ff";
-const WEAPON_COLORS = { blaster: "#63f7ff", charge: "#ffb43d", cone: "#ff72c8" };
-const SUPER_COLORS = { bomb: "#ff4f4f", invincibility: "#63ff91", lance: "#9d7bff" };
+const WEAPON_COLORS = { blaster: "#ffdc5a", charge: "#ff8a32", cone: "#63ff91", tech0: "#63f7ff" };
+const SUPER_COLORS = { bomb: "#4d9dff", invincibility: "#ffe36a", lance: "#9d7bff" };
 let selectedWeapon = "blaster";
 let selectedSuper = "bomb";
 let chargeStartedAt = 0;
@@ -241,6 +241,7 @@ let facing = { x: 0, y: -1 };
 let superBombs = [];
 let bombBlasts = [];
 let superBeam = null;
+let techChains = [];
 let sparks = [];
 let audioContext = null;
 let spaceDownAt = 0;
@@ -248,7 +249,17 @@ let suppressSpaceRelease = false;
 const keys = {};
 
 const AUDIO_STORAGE_KEY = "petros-space-adventure-audio";
+const MERCURY_UNLOCK_KEY = "petros-space-adventure-mercury-rewards";
 const audioSettings = loadAudioSettings();
+let mercuryRewardsUnlocked = loadMercuryRewards();
+
+function loadMercuryRewards() {
+  try {
+    return localStorage.getItem(MERCURY_UNLOCK_KEY) === "unlocked";
+  } catch (error) {
+    return false;
+  }
+}
 
 function loadAudioSettings() {
   const defaults = { music: 1, sfx: 0.9, muted: false };
@@ -291,6 +302,7 @@ const dom = {
   controlsPanel: document.getElementById("controls-panel"),
   changelogPanel: document.getElementById("changelog-panel"),
   weaponsPanel: document.getElementById("weapons-panel"),
+  mercuryLockPanel: document.getElementById("mercury-lock-panel"),
   bossIntro: document.getElementById("boss-intro"),
   victoryScreen: document.getElementById("victory-screen"),
   mercuryDefeatScreen: document.getElementById("mercury-defeat-screen"),
@@ -361,6 +373,7 @@ function isVisibleControl(element) {
 }
 
 function activeMenuRoot() {
+  if (dom.mercuryLockPanel.classList.contains("visible")) return dom.mercuryLockPanel;
   if (dom.mercuryDefeatScreen.classList.contains("visible")) return dom.mercuryDefeatScreen;
   if (dom.victoryScreen.classList.contains("visible")) return dom.victoryScreen;
   if (dom.bossIntro.classList.contains("visible")) return dom.bossIntro;
@@ -393,12 +406,20 @@ function closeMenuPanel(panel, trigger) {
 }
 
 let controlsReturnTarget = null;
+let mercuryLockReturnTarget = null;
 
 function openControlsPanel(trigger) {
   controlsReturnTarget = trigger;
   dom.controlsPanel.classList.add("visible");
   dom.controlsPanel.setAttribute("aria-hidden", "false");
   focusMenuDefault(dom.controlsPanel);
+}
+
+function openMercuryLockPanel(trigger) {
+  mercuryLockReturnTarget = trigger;
+  dom.mercuryLockPanel.classList.add("visible");
+  dom.mercuryLockPanel.setAttribute("aria-hidden", "false");
+  focusMenuDefault(dom.mercuryLockPanel);
 }
 
 function setAudioDrawer(section, expanded) {
@@ -414,6 +435,14 @@ function setAudioDrawer(section, expanded) {
 function collapseAudioDrawers(root) {
   if (!root) return;
   root.querySelectorAll(".audio-controls.expanded").forEach((section) => setAudioDrawer(section, false));
+}
+
+function setPrimaryGunsExpanded(expanded) {
+  const toggle = document.getElementById("primary-more-toggle");
+  const extra = document.getElementById("extra-primary-guns");
+  if (!toggle || !extra) return;
+  toggle.setAttribute("aria-expanded", String(expanded));
+  extra.hidden = !expanded;
 }
 
 function moveMenuFocus(root, code) {
@@ -470,6 +499,11 @@ function handleMenuKeydown(event) {
   }
 
   if (event.code === "Escape") {
+    if (dom.mercuryLockPanel.classList.contains("visible")) {
+      event.preventDefault();
+      closeMenuPanel(dom.mercuryLockPanel, mercuryLockReturnTarget);
+      return true;
+    }
     if (dom.weaponsPanel.classList.contains("visible")) {
       event.preventDefault();
       closeMenuPanel(dom.weaponsPanel, document.getElementById("weapons-btn"));
@@ -749,13 +783,50 @@ function draw(t) {
   setText(dom.waveNumber, String(wave));
 }
 
+// Waves after Mercury enter Venus's dense upper atmosphere. Broad sulfur
+// banks drift at different speeds while thin heat lanes slide underneath; the
+// boss itself is intentionally not introduced here.
+const VENUS_CLOUD_COLORS = ["#5a2517", "#74351d", "#8f4c25", "#b2672d", "#d08a3c"];
+function drawVenusEnvironment(t) {
+  if (wave < 6 || bossMode || testMode) return;
+  ctx.fillStyle = "#210b09";
+  ctx.fillRect(0, 0, W, H);
+  ctx.save();
+  ctx.lineCap = "round";
+  for (let i = 0; i < VENUS_CLOUD_COLORS.length; i++) {
+    const phase = t * (0.00009 + i * 0.000025) + i * 1.7;
+    const y = H * (0.12 + i * 0.17) + Math.sin(phase * 3.2) * 24;
+    const drift = Math.sin(phase) * W * 0.12;
+    ctx.globalAlpha = 0.18 + i * 0.025;
+    ctx.strokeStyle = VENUS_CLOUD_COLORS[i];
+    ctx.lineWidth = 72 + i * 10;
+    ctx.beginPath();
+    ctx.moveTo(-W * 0.18 + drift, y);
+    ctx.bezierCurveTo(W * 0.2 + drift, y - 55, W * 0.58 + drift, y + 58, W * 1.18 + drift, y - 8);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 0.18;
+  ctx.strokeStyle = "#ffd06b";
+  ctx.lineWidth = 2;
+  for (let i = 0; i < 7; i++) {
+    const y = (i + 1) * H / 8 + Math.sin(t * 0.0018 + i) * 8;
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(W, y + Math.sin(t * 0.001 + i * 2) * 12);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
 // ---------------------------------------------------------------------------
 // Enemies
 //
-// Three kinds, so a wave has a shape instead of a grid:
+// Five kinds, split across the Mercury and Venus chapters:
 //   grunt   — holds formation, fires the slow homing shot
 //   charger — winds up, then relentlessly homes into the player until destroyed
 //   turret  — armoured, never moves, fires a wide non-homing spread
+//   skimmer — Venus lane-flier that spits wobbling sulfur acid
+//   bloom   — Venus radial heat-burst emplacement
 // Chargers and turrets are what close the old "stand in this corner and never
 // get hit" gap: one comes to you, the other fills space you aren't standing in.
 // ---------------------------------------------------------------------------
@@ -763,6 +834,8 @@ const ENEMY_TYPES = {
   grunt:   { w: 22, h: 16, health: 1, score: 100, color: "#c77dff" },
   charger: { w: 20, h: 20, health: 2, score: 175, color: "#ff7a4f" },
   turret:  { w: 26, h: 22, health: 3, score: 250, color: "#5ad1c0" },
+  skimmer: { w: 24, h: 17, health: 2, score: 225, color: "#d8d94f" },
+  bloom:   { w: 27, h: 25, health: 4, score: 350, color: "#ff8a3d" },
 };
 
 function makeEnemy(type, x, y, phase) {
@@ -789,19 +862,25 @@ function makeEnemy(type, x, y, phase) {
   };
 }
 
-// Per-wave roster. Waves past the boss keep escalating from the same shapes.
+// Per-wave roster. Mercury's forces occupy 1–5; Venus formations begin at 6.
 function waveRoster(number) {
   if (number === 1) return { rows: 3, cols: 8, chargers: 0, turrets: 0 };
   if (number === 2) return { rows: 2, cols: 8, chargers: 2, turrets: 0 };
   if (number === 3) return { rows: 2, cols: 8, chargers: 1, turrets: 2 };
   if (number === 4) return { rows: 2, cols: 7, chargers: 3, turrets: 2 };
   if (number === 5) return { rows: 3, cols: 8, chargers: 3, turrets: 2 };
+  if (number === 6) return { rows: 0, cols: 0, chargers: 0, turrets: 0, skimmers: 8, blooms: 1 };
+  if (number === 7) return { rows: 0, cols: 0, chargers: 0, turrets: 0, skimmers: 10, blooms: 2 };
+  if (number === 8) return { rows: 0, cols: 0, chargers: 0, turrets: 0, skimmers: 12, blooms: 2 };
+  if (number === 9) return { rows: 0, cols: 0, chargers: 0, turrets: 0, skimmers: 14, blooms: 3 };
   const past = number - 5;
   return {
-    rows: 3,
-    cols: 8,
-    chargers: Math.min(6, 3 + past),
-    turrets: Math.min(4, 2 + Math.floor(past / 2)),
+    rows: 0,
+    cols: 0,
+    chargers: 0,
+    turrets: 0,
+    skimmers: Math.min(16, 12 + past),
+    blooms: Math.min(4, 2 + Math.floor(past / 2)),
   };
 }
 
@@ -810,6 +889,10 @@ const WAVE_INTROS = {
   3: "TURRETS DEPLOYED",
   4: "MIXED ASSAULT",
   5: "FINAL WAVE BEFORE MERCURY",
+  6: "ENTERING VENUS AIRSPACE",
+  7: "ACID SKIMMERS INBOUND",
+  8: "FURNACE BLOOMS OPENING",
+  9: "SULFUR STORM RISING",
 };
 
 function createEnemies() {
@@ -829,6 +912,21 @@ function createEnemies() {
   for (let i = 0; i < roster.chargers; i++) {
     const spread = roster.chargers === 1 ? 0 : (i / (roster.chargers - 1) - 0.5) * 2;
     enemies.push(makeEnemy("charger", W / 2 + spread * Math.min(300, W * 0.3), 120 + roster.rows * 62 + 10, i * 0.9));
+  }
+  const skimmerCount = roster.skimmers || 0;
+  const skimmerCols = Math.min(7, skimmerCount);
+  const skimmerSpacing = Math.min(78, (W - 110) / Math.max(1, skimmerCols - 1));
+  for (let i = 0; i < skimmerCount; i++) {
+    const row = Math.floor(i / skimmerCols);
+    const col = i % skimmerCols;
+    const inRow = Math.min(skimmerCols, skimmerCount - row * skimmerCols);
+    const rowWidth = skimmerSpacing * Math.max(0, inRow - 1);
+    enemies.push(makeEnemy("skimmer", W / 2 - rowWidth / 2 + col * skimmerSpacing, 145 + row * 76, i * 0.73));
+  }
+  const bloomCount = roster.blooms || 0;
+  for (let i = 0; i < bloomCount; i++) {
+    const spread = bloomCount === 1 ? 0 : (i / (bloomCount - 1) - 0.5) * 2;
+    enemies.push(makeEnemy("bloom", W / 2 + spread * Math.min(330, W * 0.34), 78, i * 1.9));
   }
 }
 
@@ -891,7 +989,7 @@ function startBombBlast(x, y, radius, color = superColor("bomb")) {
   }
   bombBlasts.push({ x, y, radius, color, life: 30, maxLife: 30, rays });
   spawnSparks(x, y, 28, color, { minSpeed: 2, maxSpeed: 9, life: 34, minSize: 2, maxSize: 5, drag: 0.95 });
-  spawnSparks(x, y, 18, "#ffbd52", { minSpeed: 1, maxSpeed: 7, life: 26, minSize: 2, maxSize: 4 });
+  spawnSparks(x, y, 18, "#a8dcff", { minSpeed: 1, maxSpeed: 7, life: 26, minSize: 2, maxSize: 4 });
   spawnSparks(x, y, 10, "#ffffff", { minSpeed: 1, maxSpeed: 5, life: 18, minSize: 1, maxSize: 3 });
   screenShakeFrames = Math.max(screenShakeFrames, 12);
   screenShakeStrength = Math.max(screenShakeStrength, 6);
@@ -930,7 +1028,7 @@ function updateBombBlasts() {
     if (progress > 0.12) {
       const secondRadius = blast.radius * Math.min(1, (progress - 0.12) * 1.35);
       ctx.globalAlpha = 0.72 * fade;
-      ctx.strokeStyle = "#ffcf70";
+      ctx.strokeStyle = "#c4e6ff";
       ctx.lineWidth = Math.max(1, 4 * fade);
       ctx.beginPath(); ctx.arc(blast.x, blast.y, secondRadius, 0, Math.PI * 2); ctx.stroke();
     }
@@ -1019,8 +1117,8 @@ function updateSuperBeam(t) {
 }
 
 // ---------------------------------------------------------------------------
-// Charge weapon: a contracting ring shows progress; at full charge the effects
-// drop away and the hull itself gives a small, readable vibration.
+// Charge weapon: segmented energy arcs tighten around the ship as power builds.
+// At full charge they ignite into a fast orbit while the hull vibrates.
 // ---------------------------------------------------------------------------
 const CHARGE_FULL_MS = 2500;
 
@@ -1031,17 +1129,52 @@ function chargeRatio() {
 
 function drawChargeAura(t) {
   const ratio = chargeRatio();
-  if (ratio <= 0 || ratio >= 1) return;
-  const radius = (player.shrunk ? 22 : 32) * (1.35 - ratio * 0.35);
-  const pulse = Math.sin(t * 0.012) * 1.5;
+  if (ratio <= 0) return;
+  const baseRadius = player.shrunk ? 24 : 36;
+  const full = ratio >= 1;
+  const radius = full
+    ? baseRadius + Math.sin(t * 0.018) * 1.5
+    : baseRadius * (1.5 - ratio * 0.42) + Math.sin(t * 0.012) * 1.2;
+  const spin = t * (full ? 0.008 : 0.0025 + ratio * 0.0025);
   const color = weaponColor("charge");
-
-  // A restrained gathering ring; no orbiting embers or flame cloud.
+  const arcCount = full ? 4 : 3;
+  ctx.save();
+  ctx.translate(player.x, player.y);
+  ctx.globalCompositeOperation = "lighter";
   ctx.strokeStyle = color;
-  ctx.globalAlpha = 0.24 + ratio * 0.46;
-  ctx.lineWidth = 2 + ratio;
-  ctx.beginPath(); ctx.arc(player.x, player.y, radius + pulse, 0, Math.PI * 2); ctx.stroke();
-  ctx.globalAlpha = 1;
+  ctx.lineCap = "round";
+  ctx.lineWidth = full ? 3.5 : 1.8 + ratio * 1.7;
+  for (let i = 0; i < arcCount; i++) {
+    const start = spin + i * Math.PI * 2 / arcCount;
+    const length = full ? 0.82 : 0.48 + ratio * 0.42;
+    ctx.globalAlpha = full ? 0.9 : 0.32 + ratio * 0.58;
+    ctx.beginPath(); ctx.arc(0, 0, radius + (i % 2) * 3, start, start + length); ctx.stroke();
+    const tip = start + length;
+    ctx.fillStyle = i % 2 ? "#fff1b0" : color;
+    ctx.beginPath(); ctx.arc(Math.cos(tip) * radius, Math.sin(tip) * radius, full ? 3.2 : 1.7 + ratio, 0, Math.PI * 2); ctx.fill();
+  }
+  if (full) {
+    ctx.globalAlpha = 0.52;
+    ctx.strokeStyle = "#ffdc5a";
+    ctx.lineWidth = 2;
+    ctx.setLineDash([6, 7]);
+    ctx.lineDashOffset = -t * 0.03;
+    ctx.beginPath(); ctx.arc(0, 0, radius - 6, 0, Math.PI * 2); ctx.stroke();
+    ctx.setLineDash([]);
+    for (let i = 0; i < 5; i++) {
+      const angle = -spin * 0.72 + i * Math.PI * 0.4;
+      const inner = radius - 4;
+      const outer = radius + 8 + Math.sin(t * 0.021 + i) * 3;
+      ctx.globalAlpha = 0.58;
+      ctx.fillStyle = i % 2 ? "#ffdc5a" : color;
+      ctx.beginPath();
+      ctx.moveTo(Math.cos(angle - 0.07) * inner, Math.sin(angle - 0.07) * inner);
+      ctx.lineTo(Math.cos(angle) * outer, Math.sin(angle) * outer);
+      ctx.lineTo(Math.cos(angle + 0.07) * inner, Math.sin(angle + 0.07) * inner);
+      ctx.closePath(); ctx.fill();
+    }
+  }
+  ctx.restore();
 }
 
 // A slow shot that steers toward the player for a limited window and then
@@ -1074,6 +1207,19 @@ function fireStraightShot(x, y, angle, speed) {
   });
 }
 
+function fireVenusShot(x, y, angle, speed, kind) {
+  enemyBullets.push({
+    x, y,
+    vx: Math.cos(angle) * speed,
+    vy: Math.sin(angle) * speed,
+    speed,
+    turnRate: 0,
+    homing: 0,
+    kind,
+    phase: rand(0, Math.PI * 2),
+  });
+}
+
 function updateEnemyBullets() {
   for (const bullet of enemyBullets) {
     let nextAngle = Math.atan2(bullet.vy, bullet.vx);
@@ -1086,12 +1232,33 @@ function updateEnemyBullets() {
       bullet.vx = Math.cos(nextAngle) * bullet.speed;
       bullet.vy = Math.sin(nextAngle) * bullet.speed;
     }
-    bullet.x += bullet.vx;
+    if (bullet.kind === "venus-acid") {
+      bullet.phase += 0.17;
+      bullet.x += bullet.vx + Math.sin(bullet.phase) * 0.75;
+    } else {
+      bullet.x += bullet.vx;
+    }
     bullet.y += bullet.vy;
     ctx.save();
     ctx.translate(bullet.x, bullet.y);
     ctx.rotate(nextAngle + Math.PI / 2);
-    if (bullet.kind === "straight") {
+    if (bullet.kind === "venus-acid") {
+      drawGlow("#dfff65", 13, 0, 0);
+      ctx.fillStyle = "#dfff65";
+      ctx.beginPath(); ctx.arc(0, 0, 6, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "#fff7a0";
+      ctx.beginPath(); ctx.arc(-2, -2, 2, 0, Math.PI * 2); ctx.fill();
+      ctx.globalAlpha = 0.55;
+      ctx.fillStyle = "#8dad33";
+      ctx.beginPath(); ctx.arc(3, 8, 3, 0, Math.PI * 2); ctx.fill();
+      ctx.globalAlpha = 1;
+    } else if (bullet.kind === "venus-heat") {
+      drawGlow("#ff8738", 12, 0, 0);
+      ctx.fillStyle = "#ff8738";
+      ctx.beginPath(); ctx.moveTo(0, -8); ctx.lineTo(5, 5); ctx.lineTo(0, 8); ctx.lineTo(-5, 5); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = "#fff0a8";
+      ctx.fillRect(-1, -5, 2, 9);
+    } else if (bullet.kind === "straight") {
       ctx.fillStyle = "#ffb03a";
       ctx.fillRect(-3, -5, 6, 10);
       ctx.fillStyle = "#fff2c9";
@@ -1166,11 +1333,12 @@ function drawGame(t) {
   }
   if (fireCooldown <= 0 && aim.held) {
     if (selectedWeapon === "cone") {
-      fireCone(aimX, aimY);
-      fireCooldown = player.shrunk ? 54 : 18;
+      if (fireCone(aimX, aimY)) fireCooldown = player.shrunk ? 54 : 18;
     } else if (selectedWeapon === "blaster") {
       fireInDirection(aimX, aimY);
       fireCooldown = player.shrunk ? 30 : 10;
+    } else if (selectedWeapon === "tech0") {
+      if (fireInDirection(aimX, aimY, 3, "tech0", 5)) fireCooldown = 60;
     }
   }
 
@@ -1179,6 +1347,7 @@ function drawGame(t) {
   if (invincibilitySuperTimer > 0) invincibilitySuperTimer--;
   if (bossMode) { drawBossArea(t); return; }
   if (testMode) { drawTestRoom(); return; }
+  drawVenusEnvironment(t);
 
   for (const bomb of superBombs) {
     bomb.x += bomb.vx;
@@ -1204,7 +1373,7 @@ function drawGame(t) {
     startBombBlast(bomb.x, bomb.y, blastRadius, bomb.color);
     for (const enemy of enemies) {
       if (enemy.alive && Math.hypot(enemy.x - bomb.x, enemy.y - bomb.y) < blastRadius) {
-        enemy.alive = false; score += 100; kills++;
+        enemy.alive = false; score += ENEMY_TYPES[enemy.type].score; kills++;
       }
     }
   }
@@ -1249,6 +1418,7 @@ function drawGame(t) {
     if (!enemy.alive) continue;
     if (enemy.hitFlash > 0) enemy.hitFlash--;
     const ey = updateEnemy(enemy, time);
+    enemy.renderY = ey;
     drawEnemy(enemy, ey, time);
 
     const playerHitbox = player.shrunk ? 8 : 16;
@@ -1259,8 +1429,13 @@ function drawGame(t) {
 
     for (const bullet of bullets) {
       if (Math.abs(bullet.x - enemy.x) < enemy.w + 4 && Math.abs(bullet.y - ey) < enemy.h + 6) {
+        const hitX = enemy.x;
+        const hitY = ey;
         damageEnemy(enemy, bullet.damage || 1);
-        if (bullet.pierceRemaining !== Infinity) {
+        if (bullet.type === "tech0") {
+          bullet.y = -100;
+          startTechChain(enemy, hitX, hitY);
+        } else if (bullet.pierceRemaining !== Infinity) {
           bullet.pierceRemaining--;
           if (bullet.pierceRemaining <= 0) bullet.y = -100;
         }
@@ -1269,10 +1444,12 @@ function drawGame(t) {
     }
     if (superBeam) damageAlongBeam(enemy, ey);
   }
+  updateTechChains(t);
   let anyAlive = false;
   for (const enemy of enemies) if (enemy.alive) { anyAlive = true; break; }
   if (!anyAlive) {
     bullets = [];
+    techChains = [];
     enemyBullets = [];
     if (wave === 5) { enterBossArea(); return; }
     player.x = W / 2;
@@ -1284,6 +1461,74 @@ function drawGame(t) {
     createEnemies();
     announceWave(wave, 1250);
   }
+}
+
+// Tech.0 jumps onward from the impact point through as many as four nearby
+// survivors. Each hop searches from the previous target, producing a readable
+// lightning path through a clustered formation rather than four disconnected hits.
+function startTechChain(source, x, y) {
+  const visited = new Set([source]);
+  let fromX = x;
+  let fromY = y;
+  for (let hop = 0; hop < 4; hop++) {
+    let target = null;
+    let nearest = 230;
+    for (const enemy of enemies) {
+      if (!enemy.alive || visited.has(enemy)) continue;
+      const targetY = enemy.renderY === undefined ? enemy.y : enemy.renderY;
+      const distance = Math.hypot(enemy.x - fromX, targetY - fromY);
+      if (distance < nearest) {
+        target = enemy;
+        nearest = distance;
+      }
+    }
+    if (!target) break;
+    visited.add(target);
+    const targetY = target.renderY === undefined ? target.y : target.renderY;
+    damageEnemy(target, 0.5);
+    spawnSparks(target.x, targetY, 9, WEAPON_COLORS.tech0,
+      { minSpeed: 0.4, maxSpeed: 2.8, life: 22, maxSize: 3 });
+    techChains.push({
+      x1: fromX, y1: fromY, x2: target.x, y2: targetY,
+      life: 18, maxLife: 18, seed: Math.random() * 1000 + hop * 31,
+    });
+    fromX = target.x;
+    fromY = targetY;
+  }
+  if (techChains.length) playSound(860, 0.08, "sawtooth");
+}
+
+function updateTechChains(t) {
+  if (!techChains.length) return;
+  ctx.save();
+  ctx.globalCompositeOperation = "lighter";
+  ctx.lineJoin = "bevel";
+  for (const chain of techChains) {
+    chain.life--;
+    const fade = Math.max(0, chain.life / chain.maxLife);
+    const dx = chain.x2 - chain.x1;
+    const dy = chain.y2 - chain.y1;
+    const length = Math.hypot(dx, dy) || 1;
+    const nx = -dy / length;
+    const ny = dx / length;
+    const segments = 7;
+    for (let pass = 0; pass < 2; pass++) {
+      ctx.strokeStyle = pass ? "#eaffff" : WEAPON_COLORS.tech0;
+      ctx.globalAlpha = fade * (pass ? 0.95 : 0.46);
+      ctx.lineWidth = pass ? 2 : 7;
+      ctx.beginPath();
+      ctx.moveTo(chain.x1, chain.y1);
+      for (let i = 1; i < segments; i++) {
+        const progress = i / segments;
+        const jitter = Math.sin(chain.seed + i * 13.7 + t * 0.08) * (pass ? 7 : 9);
+        ctx.lineTo(chain.x1 + dx * progress + nx * jitter, chain.y1 + dy * progress + ny * jitter);
+      }
+      ctx.lineTo(chain.x2, chain.y2);
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+  compact(techChains, (chain) => chain.life > 0);
 }
 
 function damageEnemy(enemy, amount) {
@@ -1315,6 +1560,42 @@ function announceWave(number, delay) {
 // fixed home, chargers actually move, so for them it is just enemy.y.
 function updateEnemy(enemy, time) {
   if (enemy.type === "grunt") return enemy.y + Math.sin(time * 2 + enemy.phase) * 5;
+
+  if (enemy.type === "skimmer") {
+    enemy.timer--;
+    const sway = Math.min(58, W * 0.055);
+    enemy.x = Math.max(26, Math.min(W - 26, enemy.homeX + Math.sin(time * 0.95 + enemy.phase) * sway));
+    const ey = enemy.homeY + Math.sin(time * 2.5 + enemy.phase) * 10;
+    const aim = Math.atan2(player.y - ey, player.x - enemy.x);
+    enemy.aimX = Math.cos(aim);
+    enemy.aimY = Math.sin(aim);
+    if (enemy.timer === 24) enemy.state = "wind";
+    if (enemy.timer <= 0) {
+      fireVenusShot(enemy.x, ey + 12, aim, 2.65, "venus-acid");
+      enemy.state = "idle";
+      enemy.timer = 115 + Math.floor(Math.random() * 70);
+      playSound(260, 0.09, "triangle");
+    }
+    return ey;
+  }
+
+  if (enemy.type === "bloom") {
+    enemy.timer--;
+    enemy.spin += 0.018;
+    const ey = enemy.homeY + Math.sin(time * 1.35 + enemy.phase) * 5;
+    if (enemy.timer === 34) enemy.state = "wind";
+    if (enemy.timer <= 0) {
+      const count = wave >= 9 ? 8 : 6;
+      const base = Math.atan2(player.y - ey, player.x - enemy.x) - Math.PI * 0.72;
+      for (let i = 0; i < count; i++) {
+        fireVenusShot(enemy.x, ey, base + i * (Math.PI * 1.44 / Math.max(1, count - 1)), 2.45, "venus-heat");
+      }
+      enemy.state = "idle";
+      enemy.timer = 165 + Math.floor(Math.random() * 85);
+      playSound(115, 0.16, "sawtooth");
+    }
+    return ey;
+  }
 
   if (enemy.type === "turret") {
     enemy.spin += 0.01;
@@ -1399,6 +1680,57 @@ function drawEnemy(enemy, ey, time) {
     return;
   }
 
+  if (enemy.type === "skimmer") {
+    const winding = enemy.state === "wind";
+    ctx.save();
+    ctx.translate(enemy.x, ey);
+    if (winding) drawGlow("#dfff65", 22, 0, 0);
+    ctx.fillStyle = flash ? "#ffffff" : winding ? "#f0ff8e" : "#d8d94f";
+    ctx.beginPath();
+    ctx.moveTo(0, -enemy.h);
+    ctx.quadraticCurveTo(-13, -10, -enemy.w, 2);
+    ctx.quadraticCurveTo(-11, 8, 0, enemy.h);
+    ctx.quadraticCurveTo(11, 8, enemy.w, 2);
+    ctx.quadraticCurveTo(13, -10, 0, -enemy.h);
+    ctx.fill();
+    ctx.fillStyle = "#4b3810";
+    ctx.beginPath(); ctx.ellipse(0, 1, 10, 7, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = "#fff39a";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(-19, 1); ctx.quadraticCurveTo(-10, -8, 0, -5); ctx.quadraticCurveTo(10, -8, 19, 1); ctx.stroke();
+    ctx.fillStyle = winding ? "#ffffff" : "#b9ff67";
+    ctx.beginPath(); ctx.arc(0, 1, 3.5, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+    return;
+  }
+
+  if (enemy.type === "bloom") {
+    const winding = enemy.state === "wind";
+    const pulse = winding ? 1.12 + Math.sin(time * 26) * 0.08 : 1;
+    ctx.save();
+    ctx.translate(enemy.x, ey);
+    ctx.rotate(enemy.spin);
+    ctx.scale(pulse, pulse);
+    if (winding) drawGlow("#ff9d42", 29, 0, 0);
+    ctx.fillStyle = flash ? "#ffffff" : winding ? "#ffc36e" : "#ff8a3d";
+    for (let i = 0; i < 8; i++) {
+      ctx.rotate(Math.PI / 4);
+      ctx.beginPath();
+      ctx.ellipse(0, -19, 7, 14, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.fillStyle = flash ? "#ff8a3d" : "#5b1d12";
+    ctx.beginPath(); ctx.arc(0, 0, 13, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = winding ? "#fff2a6" : "#ffce58";
+    ctx.beginPath(); ctx.arc(0, 0, 6, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = "#ffe68d";
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(0, 0, 19, 0, Math.PI * 2); ctx.stroke();
+    ctx.restore();
+    return;
+  }
+
   if (enemy.type === "turret") {
     const winding = enemy.state === "wind";
     ctx.save();
@@ -1479,6 +1811,7 @@ function enterBossArea() {
   bossShotTimer = 64;
   bossAttackTimer = 150;
   bossBullets = [];
+  techChains = [];
   document.getElementById("boss-health").classList.add("visible");
   // through setWidth, so the change-detection cache doesn't go stale and skip
   // the first real write of the next fight
@@ -1694,6 +2027,7 @@ function startBossDeath() {
   bossBullets = [];
   enemyBullets = [];
   superBombs = [];
+  techChains = [];
   music.stop();
   setWidth(dom.bossFill, 0);
   playSound(70, 0.9, "sawtooth");
@@ -2269,6 +2603,7 @@ function showVictory() {
   document.getElementById("victory-player-name").textContent = playerName;
   setText(document.getElementById("victory-score"), String(score).padStart(6, "0"));
   setText(document.getElementById("victory-waves"), "5");
+  unlockMercuryRewards();
   refreshLoadoutUI();
   document.getElementById("victory-screen").classList.add("visible");
   document.getElementById("victory-screen").setAttribute("aria-hidden", "false");
@@ -2374,6 +2709,7 @@ function endGame() {
   music.stop();
   bossMode = false;
   superBeam = null;
+  techChains = [];
   gameOverShown = true;
   enemyBullets = [];
   if (defeatedByMercury) {
@@ -2413,6 +2749,7 @@ function startGame() {
   enemyBullets = [];
   superBombs = [];
   bombBlasts = [];
+  techChains = [];
   setPaused(false);
   sparks = [];
   superBeam = null;
@@ -2547,6 +2884,7 @@ function returnToMenu() {
   superBombs = [];
   bombBlasts = [];
   superBeam = null;
+  techChains = [];
   dom.pauseScreen.classList.remove("visible");
   dom.pauseScreen.setAttribute("aria-hidden", "true");
   document.getElementById("game-ui").classList.remove("active");
@@ -2590,7 +2928,7 @@ function updateSuperMeter() {
   }
 }
 
-const WEAPON_LABELS = { blaster: "BLASTER", charge: "CHARGE", cone: "CONE" };
+const WEAPON_LABELS = { blaster: "BLASTER", charge: "CHARGE", cone: "CONE", tech0: "TECH.0" };
 const SUPER_LABELS = { bomb: "BOMB", invincibility: "SHIELD", lance: "TECHNOLOGY" };
 
 // Every place a loadout can be picked (weapons panel + victory screen) is
@@ -2621,10 +2959,37 @@ function refreshLoadoutUI() {
   if (summary) summary.textContent = label;
 }
 
+function syncMercuryRewardUI() {
+  document.querySelectorAll("[data-mercury-locked]").forEach((item) => {
+    item.classList.toggle("locked", !mercuryRewardsUnlocked);
+    item.setAttribute("aria-disabled", String(!mercuryRewardsUnlocked));
+  });
+  const greyChoice = document.querySelector(".color-choice.grey");
+  if (greyChoice) {
+    greyChoice.setAttribute("aria-label", mercuryRewardsUnlocked ? "Grey" : "Grey ship locked: beat Mercury");
+  }
+  const note = document.getElementById("mercury-unlock-note");
+  if (note) note.textContent = mercuryRewardsUnlocked ? "MERCURY REWARDS UNLOCKED" : "GREY LOCKED — BEAT MERCURY";
+}
+
+function unlockMercuryRewards() {
+  if (!mercuryRewardsUnlocked) {
+    mercuryRewardsUnlocked = true;
+    try {
+      localStorage.setItem(MERCURY_UNLOCK_KEY, "unlocked");
+    } catch (error) {
+      // The reward still unlocks for this session when storage is unavailable.
+    }
+  }
+  syncMercuryRewardUI();
+}
+
 function setSelectedWeapon(nextWeapon) {
+  if (nextWeapon === "tech0" && !mercuryRewardsUnlocked) return false;
   selectedWeapon = nextWeapon;
   refreshLoadoutUI();
   playSound(660, 0.06, "square");
+  return true;
 }
 
 function setSelectedSuper(nextSuper) {
@@ -2987,8 +3352,10 @@ function currentAimVector() {
   return aimVector;
 }
 
+const MAX_PLAYER_BULLETS = 12;
+
 function fireInDirection(dx, dy, damage = 1, type = "basic", size = 3) {
-  if (!gameActive || bullets.length >= 10) return;
+  if (!gameActive || bullets.length >= MAX_PLAYER_BULLETS) return false;
   const length = Math.hypot(dx, dy) || 1;
   dx /= length;
   dy /= length;
@@ -2999,6 +3366,7 @@ function fireInDirection(dx, dy, damage = 1, type = "basic", size = 3) {
     : 1;
   const color = weaponColor(type === "basic" ? "blaster" : type);
   bullets.push({ x: player.x, y: player.y, vx: dx * 10, vy: dy * 10, damage, type, size, pierceRemaining, color });
+  return true;
 }
 
 function drawPlayerBullet(bullet) {
@@ -3008,16 +3376,57 @@ function drawPlayerBullet(bullet) {
   ctx.rotate(Math.atan2(bullet.vy, bullet.vx) + Math.PI / 2);
   if (bullet.type === "charge") {
     const hot = (bullet.damage || 1) >= 4;
+    if (hot) {
+      const flicker = 0.82 + Math.sin(performance.now() * 0.035 + bullet.x * 0.07 + bullet.y * 0.04) * 0.18;
+      ctx.globalCompositeOperation = "lighter";
+      ctx.fillStyle = "#ff3f20";
+      ctx.globalAlpha = 0.72;
+      ctx.beginPath();
+      ctx.moveTo(-bullet.size * 0.82, bullet.size * 0.2);
+      ctx.quadraticCurveTo(-bullet.size * 0.62, bullet.size + 10, 0, bullet.size + 30 * flicker);
+      ctx.quadraticCurveTo(bullet.size * 0.62, bullet.size + 10, bullet.size * 0.82, bullet.size * 0.2);
+      ctx.closePath(); ctx.fill();
+      ctx.fillStyle = "#ffdc5a";
+      ctx.globalAlpha = 0.9;
+      ctx.beginPath();
+      ctx.moveTo(-bullet.size * 0.48, bullet.size * 0.1);
+      ctx.quadraticCurveTo(-bullet.size * 0.28, bullet.size + 6, 0, bullet.size + 19 * flicker);
+      ctx.quadraticCurveTo(bullet.size * 0.28, bullet.size + 6, bullet.size * 0.48, bullet.size * 0.1);
+      ctx.closePath(); ctx.fill();
+      ctx.globalCompositeOperation = "source-over";
+      ctx.globalAlpha = 1;
+    }
     drawGlow(color, hot ? 20 : 12, 0, 0);
     ctx.fillStyle = color;
     ctx.beginPath(); ctx.arc(0, 0, bullet.size, 0, Math.PI * 2); ctx.fill();
     ctx.fillStyle = "#ffffff";
     ctx.beginPath(); ctx.arc(0, 0, bullet.size * 0.45, 0, Math.PI * 2); ctx.fill();
     if (hot) {
+      const emberRoll = Math.random();
+      const emberColor = emberRoll < 0.28 ? "#ffffff" : emberRoll < 0.66 ? "#ffdc5a" : "#ff3f20";
       spawnSparks(bullet.x - bullet.vx * 0.5, bullet.y - bullet.vy * 0.5, 2,
-        Math.random() < 0.35 ? "#ffffff" : color,
+        emberColor,
         { minSpeed: 0.2, maxSpeed: 1.2, life: 18, maxSize: 3 });
     }
+  } else if (bullet.type === "tech0") {
+    const flicker = Math.sin(performance.now() * 0.04 + bullet.x * 0.08) * 3;
+    ctx.globalCompositeOperation = "lighter";
+    ctx.globalAlpha = 0.58;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(0, bullet.size + 14);
+    ctx.lineTo(-4, bullet.size + 8);
+    ctx.lineTo(3 + flicker, bullet.size + 2);
+    ctx.lineTo(0, 0);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+    drawGlow(color, 15, 0, 0);
+    ctx.fillStyle = color;
+    ctx.beginPath(); ctx.arc(0, 0, bullet.size, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#efffff";
+    ctx.beginPath(); ctx.arc(-1, -1, bullet.size * 0.45, 0, Math.PI * 2); ctx.fill();
+    ctx.globalCompositeOperation = "source-over";
   } else if (bullet.type === "cone") {
     ctx.fillStyle = color;
     ctx.beginPath(); ctx.moveTo(0, -7); ctx.lineTo(4, 0); ctx.lineTo(0, 7); ctx.lineTo(-4, 0); ctx.closePath(); ctx.fill();
@@ -3063,6 +3472,9 @@ let chargeMeterFull = false;
 const CONE_ANGLES = [-0.16, 0, 0.16];
 
 function fireCone(dx, dy) {
+  // Reserve the whole burst before firing so the global projectile cap can
+  // never clip a Cone volley down to one or two shots.
+  if (bullets.length > MAX_PLAYER_BULLETS - CONE_ANGLES.length) return false;
   const length = Math.hypot(dx, dy) || 1; dx /= length; dy /= length;
   const base = Math.atan2(dy, dx);
   for (const offset of CONE_ANGLES) {
@@ -3072,6 +3484,7 @@ function fireCone(dx, dy) {
   // after the shots, so it isn't left pointing along the last cone arm
   facing.x = dx;
   facing.y = dy;
+  return true;
 }
 
 function showLoading(callback) {
@@ -3113,6 +3526,7 @@ document.documentElement.dataset.quality = quality.name;
 
 resize();
 initStars();
+syncMercuryRewardUI();
 refreshLoadoutUI();
 setTheme(playerColor);
 syncAudioControls();
@@ -3176,7 +3590,7 @@ document.getElementById("victory-continue").addEventListener("click", function (
   player.x = W / 2; player.y = H - 80; player.vx = 0; player.vy = 0;
   enemyBullets = [];
   createEnemies();
-  showWaveBanner("WAVE 6", "MERCURY'S SURVIVORS");
+  showWaveBanner("WAVE 6", "ENTERING VENUS AIRSPACE");
 });
 document.getElementById("admin-submit").addEventListener("click", function () {
   const input = document.getElementById("admin-code");
@@ -3208,6 +3622,10 @@ document.getElementById("changelog-close").addEventListener("click", function ()
   closeMenuPanel(dom.changelogPanel, document.getElementById("changelog-btn"));
 });
 document.querySelectorAll(".color-choice").forEach((choice) => choice.addEventListener("click", function () {
+  if (choice.matches("[data-mercury-locked]") && !mercuryRewardsUnlocked) {
+    openMercuryLockPanel(choice);
+    return;
+  }
   playerColor = choice.dataset.color;
   setTheme(playerColor);
   document.querySelectorAll(".color-choice").forEach((item) => item.classList.remove("selected"));
@@ -3219,12 +3637,19 @@ document.getElementById("controls-close").addEventListener("click", function () 
 });
 document.getElementById("weapons-btn").addEventListener("click", function () {
   const panel = document.getElementById("weapons-panel");
+  setPrimaryGunsExpanded(selectedWeapon === "tech0");
   panel.classList.add("visible");
   panel.setAttribute("aria-hidden", "false");
   focusMenuDefault(panel);
 });
 document.getElementById("weapons-close").addEventListener("click", function () {
   closeMenuPanel(dom.weaponsPanel, document.getElementById("weapons-btn"));
+});
+document.getElementById("mercury-lock-close").addEventListener("click", function () {
+  closeMenuPanel(dom.mercuryLockPanel, mercuryLockReturnTarget);
+});
+document.getElementById("primary-more-toggle").addEventListener("click", function () {
+  setPrimaryGunsExpanded(this.getAttribute("aria-expanded") !== "true");
 });
 
 document.querySelectorAll("[data-audio-toggle]").forEach((toggle) => toggle.addEventListener("click", function () {
@@ -3245,6 +3670,10 @@ document.querySelectorAll("[data-audio-mute]").forEach((button) => button.addEve
   if (!audioSettings.muted) playSound(820, 0.08, "square");
 }));
 document.querySelectorAll(".weapon-tile[data-weapon]").forEach((tile) => tile.addEventListener("click", function () {
+  if (tile.matches("[data-mercury-locked]") && !mercuryRewardsUnlocked) {
+    openMercuryLockPanel(tile);
+    return;
+  }
   setSelectedWeapon(tile.dataset.weapon);
 }));
 document.querySelectorAll(".weapon-tile[data-super]").forEach((tile) => tile.addEventListener("click", function () {
@@ -3252,6 +3681,10 @@ document.querySelectorAll(".weapon-tile[data-super]").forEach((tile) => tile.add
 }));
 
 document.querySelectorAll("[data-victory-weapon]").forEach((tile) => tile.addEventListener("click", function () {
+  if (tile.matches("[data-mercury-locked]") && !mercuryRewardsUnlocked) {
+    openMercuryLockPanel(tile);
+    return;
+  }
   setSelectedWeapon(tile.dataset.victoryWeapon);
 }));
 document.querySelectorAll("[data-victory-super]").forEach((tile) => tile.addEventListener("click", function () {
@@ -3324,7 +3757,8 @@ window.addEventListener("keyup", function (e) {
     const dirY = shotX || shotY ? shotY : chargeDirection.y;
     const held = performance.now() - chargeStartedAt;
     const damage = held >= CHARGE_FULL_MS ? 5 : held >= CHARGE_FULL_MS * 0.5 ? 3 : 1;
-    const size = damage === 5 ? 9 : damage === 3 ? 6 : 3;
+    // Every Charge tier is a ball, with an unmistakable jump in diameter.
+    const size = damage === 5 ? 14 : damage === 3 ? 9 : 5;
     if (!player.shrunk || fireCooldown <= 0) {
       fireInDirection(dirX, dirY, damage, "charge", size);
       if (player.shrunk) fireCooldown = 45;
