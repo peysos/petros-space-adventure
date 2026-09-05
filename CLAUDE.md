@@ -78,6 +78,21 @@ that is measured in frames just works — don't reintroduce a bare `requestAnima
 
 **Backdrop.** `drawStaticStars(t)` fills the whole viewport with pixel-square stars on three parallax layers, drifting downward and wrapping. Density scales with viewport area and with `quality.stars`, capped at `MAX_BACKDROP_STARS` (1000) — a 4K screen otherwise asked for ~3500, each its own `fillStyle` write plus `fillRect`. The field is sorted by tint at init so the draw loop sets `fillStyle` six times per frame instead of once per star, and is respread by `resize()` so it always covers the screen edge to edge.
 
+**Loadout icons in the HUD.** The equipped gun and super sit beside the super meter in
+`.hud-loadout`, which is bottom-anchored and given `.super-track`'s own height so the icons
+share the **bar's** centre line. Anchoring to the meter's whole box instead puts them about ten
+pixels high, because that box also contains the SUPER label above the bar. Each preview draws
+different-sized art inside the shared 58×48 box, so every icon gets a `--icon-scale` that lands
+it on the same visual height. Hovering or focusing one shows `#hud-loadout-card`, built from
+`BOOK_ENTRIES` and `BOOK_STATS` so the card and the FLIGHT ARMORY can never disagree; it is
+deliberately quiet and `pointer-events: none`, and it renders on demand rather than per frame.
+
+**Mercury rewards.** `syncMercuryRewardUI()` unlocks the grey ship and Tech.0 everywhere they
+appear. The reward screen offers them rather than forcing them: two grey `.reward-equip`
+buttons call `setSelectedWeapon("tech0")` and `setPlayerColor(GREY_SHIP_COLOR)` and flip to a
+filled EQUIPPED state, kept in sync by `syncRewardEquipButtons()`. `setPlayerColor()` is the
+single path that applies a ship colour, so the menu swatches and the reward card can't drift.
+
 **HUD is DOM, not canvas.** Score, lives, wave, super meter, charge meter, boss health, and
 all overlays are HTML elements. The canvas draws only the play field.
 
@@ -98,13 +113,94 @@ goes stale and silently swallows the next real write.
    enemy advances the wave; `showWaveBanner()` announces both the clear and the next wave.
 4. Wave 5 clear → `enterBossArea()` → boss intro card → `startBossFight()` (starts a
    `setInterval` bass loop as boss music).
-5. Boss **MERCURY** has 75 HP (`BOSS_MAX_HEALTH`). Enter/Space skip the intro card
+5. Boss **MERCURY** has 110 HP (`BOSS_MAX_HEALTH`). Enter/Space skip the intro card
    (`tryConfirmScreen`), same as clicking CONTINUE.
 6. On defeat: `startBossDeath()` runs a ~175-frame sequence — chained surface blasts,
    then one big detonation at frame 126 that scatters debris — before `finishBossDeath()`
    grants `+1 HP`, sets `wave = 6` and opens `showVictory()`.
-7. Continuing enters Venus airspace for waves 6–9. Wave 10 still uses placeholder wave logic;
-   no Venus boss encounter has been implemented yet.
+7. Continuing enters Venus airspace for waves 6–9. Clearing wave 9 sets `wave = 10` and
+   calls `enterBossArea("venus")`.
+8. Boss **VENUS** has 210 HP (`VENUS_MAX_HEALTH`). It shares the whole boss shell with
+   Mercury — intro card, health bar, debris, `damageBoss()`, the death sequence — and
+   differs only in `drawVenus()` and `updateVenusBoss()`. On defeat `finishBossDeath()`
+   grants `+1 HP`, sets `wave = 11` and drops straight back into the Venus waves; there is
+   no reward screen for it yet.
+
+**Both fights run three phases.** `updateBossPhase()` steps `bossPhase` at 2/3 and 1/3 health,
+shared by both planets: it flashes, shakes, throws debris and banners the phase. `phaseRate()`
+returns the `PHASE_RATE` multiplier that every attack timer in either fight is scaled by, so
+"harder" is one number rather than a dozen scattered constants. A single-phase boss is a damage
+race — once you have read its three patterns there is nothing left to learn, which is what made
+both fights fall over.
+
+**Mercury's brood.** From phase 2 Mercury throws chips of itself: `bossMinions`, spawned by
+`spawnBossMinion()` and run by `updateBossMinions()`. Two health each, they home with a turn
+rate that tightens in phase 3, hurt on contact, and are worth score and super meter — so
+clearing the brood is a real choice against hitting the planet. `MINION_CAP` bounds them at 7.
+
+**Which planet is in the arena** is `bossKind` (`"mercury"` | `"venus"`). Anything shared
+between the two fights reads `bossRadius()`, `bossMaxHealth()` and `bossLabel()` rather than
+the Mercury constants — that includes the bomb blast, the beam tick, the health bar and the
+player-bullet hit test. `enterBossArea(kind)` is the only place that sets it, and both
+`startGame()` and `returnToMenu()` put it back to `"mercury"`.
+
+### Venus
+
+`drawVenus(t)` is all atmosphere and no surface. A cached radial body gradient carries the
+sulfur palette; `VENUS_BANDS` lays six cloud decks over it, each an ellipse clipped to the disc,
+sliding at its own rate and *breathing* in thickness and alpha so the atmosphere churns instead
+of sitting there as six static stripes. `venusCells` drifts five storm cells across the face,
+wrapping at the limb, and a hot limb arc gives the sphere an edge instead of letting it fade
+out. A double-spiral polar vortex sits over the top pole and winds tighter as an attack builds. Both the decks and the vortex turn **backwards** (`venusSpin` and
+`venusVortexSpin` decrement) because Venus is retrograde, and it is the one thing about the
+planet everybody knows. Damage reuses `BOSS_CRACKS` as molten fissures showing through the
+deck, and the face is two coals burning through the cloud plus a furnace vent for a mouth.
+
+`updateVenusBoss(t)` picks from `VENUS_ATTACKS` at random with no immediate repeat, rather than
+running a fixed cycle — a fixed order is a script, and once you have the script the fight is
+over. From phase 2 `venusChain` also runs a second pattern straight onto the end of the first
+with no rest, so the combinations keep coming after all six are familiar. Every pattern has a
+harder variant at phase 2 and again at phase 3.
+
+| Attack | Shape |
+| --- | --- |
+| `rain` | Sheets of acid darts fall from the deck, each with a two-lane gap that walks. The gap can double back, so it cannot be pre-walked. |
+| `spiral` | Arms of heat orbs winding backwards, matching the planet's own rotation. In phase 3 it reverses direction partway through. |
+| `storm` | Warned lightning columns: a thin line, then a wide bolt. The warning shortens each phase, and the last two columns *lead* the ship rather than marking where it already is. |
+| `pressure` | A greenhouse ring with one gap opposite the player; later rings move the gap, so standing in the first one is not enough. |
+| `sweep` | A narrow fan swung across the arena like a searchlight. There is no gap to find — the answer is to be behind the sweep, which means committing early. |
+| `dive` | The planet itself comes down the ship's column and slams, throwing two fronts of orbs along the floor. The only attack that threatens the bottom of the arena, which is where everything else lets you hide. |
+
+The dive runs as its own state machine (`venusDive`, `updateVenusDive()`) because it is
+performed with the body rather than with projectiles. Everything else queues through
+`queueVenusShot(delay, fn)` into `venusQueue`, drained by `updateVenusQueue()` — spreading a
+volley over frames is what keeps the arena dangerous without putting a wall of bullets on screen
+at once. `venusBolts` is the separate lightning list, drawn and collision-checked by
+`updateVenusBolts()`. Venus orbs live in `bossBullets` and carry their own `r`/`color`/`core`,
+so that loop is no longer Mercury-specific, and `VENUS_ORB_CAP` (130) bounds them: a phase-3
+chain could otherwise stack past two hundred, which stops being difficulty and becomes a wall.
+
+**`VENUS_TELL` is what makes the density fair.** Each pattern lights the corona, the vortex, the
+limb and both eyes in its own colour while it winds up (`venusTelegraph` / `venusTelegraphAt`),
+and the whole atmosphere visibly spins up with it. It is also most of what makes the planet look
+alive between attacks.
+
+### Venus's attack selection
+
+`VENUS_ATTACKS` holds seven patterns; `pickVenusAttack()` no longer rolls flat. It scores each
+candidate against the ship first — hugging an edge pulls `sweep` and `pressure`, standing still
+pulls `storm` and `hunter`, sitting low pulls `dive`, crowding the planet pulls `pressure` and
+`spiral` — then takes a weighted reservoir pick, so the bias is real but nothing is ever
+guaranteed. A flat roll was what let a player hold one wall for a whole phase and simply wait
+out the patterns that don't reach there. For the same reason `bossDrift` now leans much harder
+toward a ship pinned against an edge: the corner closes instead of sheltering you.
+
+`hunter` is the seventh pattern: 3–5 seeker darts fired one at a time (so they arrive strung
+out rather than as a wall) that steer for 140–180 frames before committing. It is the only
+attack that follows you into a corner.
+
+Phase 3 also never gives a single-pattern breather again — `venusChain` is always at least 1
+there — and `venusRestFrames()` drops its floor from 20 to 12.
 
 ### Mercury
 
@@ -150,9 +246,63 @@ Five types, defined in `ENEMY_TYPES` and driven by `updateEnemy()` / `drawEnemy(
 
 `waveRoster(n)` decides the mix (wave 2 introduces chargers, wave 3 turrets, wave 4 both,
 and waves 6–9 replace Mercury's forces with increasingly dense Venus formations);
-`WAVE_INTROS` supplies the banner subtitle that calls out what's new. `drawVenusEnvironment()`
-fills post-Mercury waves with drifting sulfur banks and heat lanes without introducing the
-future Venus boss.
+`WAVE_INTROS` supplies the banner subtitle that calls out what's new.
+
+### The Venus sky
+
+`drawVenusEnvironment()` paints every post-Mercury wave. It is a sky, not a set of stripes:
+a cached vertical gradient (`VENUS_SKY_STOPS`), a sulfur sun burning through the haze
+(`venusSunGradient`), four filled cloud decks (`VENUS_DECKS`) whose top edge is a running sum
+of two sines and which scroll at their own speeds with a lit rim and two rolling swells each,
+a rising ash-and-ember field (`venusMotes`), cloud-to-cloud lightning on `venusFlashTimer`,
+and heat shimmer under the lot. Everything constant — gradients and the mote field — is built
+once by `buildVenusAtmosphere()` and only rebuilt when the viewport or the quality tier
+changes; the swells are the one costly part, so they are skipped below `medium`.
+
+**The Venus formations are deliberately as they were.** An attempt to thin them out —
+staggered lanes, one shared firing scheduler and redrawn enemies — was reverted wholesale at
+the player's request, and the counts in `waveRoster` have not been touched since. Art and
+*behaviour* are a separate matter and were both later reworked on request: the projectiles
+were redrawn, and the chapter was made to escalate. Nothing about who spawns where changed.
+
+### How the Venus chapter escalates
+
+`venusPressure()` is the single dial: 0 on wave 6, 1 by wave 9, drifting up to 1.5 in the
+post-game waves. Everything that gets harder reads off it rather than checking `wave` itself —
+skimmer and bloom fire cadence, crescent speed, how far the skimmers lead the ship, the seed's
+fuse and shard count, and whether the skimmers evade at all.
+
+- **Skimmers dodge** from wave 7. `updateDodge()` projects each live player round forward,
+  finds the one whose closest approach passes within `DODGE_CLEARANCE` of the enemy, and kicks
+  it perpendicular to that round's line. The kick is an *offset* (`dodgeX` / `dodgeY`, capped
+  at `DODGE_LIMIT` and decaying) laid on top of the formation position, so lane discipline
+  survives — they just stop being free hits. It never writes `enemy.state`; the wind-up tell
+  has to stay visible.
+- **Skimmers lead.** They aim at where the ship will be, by `10 + pressure * 16` frames, and
+  from the middle of the chapter they add a straight third blade so the two curving ones can
+  no longer be split down the middle.
+- **Blooms walk.** They close the horizontal gap on the ship (each holding its own station off
+  the ship's column so two never stack), so the seed starts its run from above you.
+
+### The bloom seed
+
+`venus-seed` was the weakest thing in the chapter: it drifted out of the bloom at 2.1, stalled,
+and two seconds later popped a *fixed diagonal cross* wherever it happened to be — which was
+never near the player. It now hunts. It steers at the ship at `bullet.turn` for its whole fuse,
+arms with a flash and a chirp the moment it comes within `SEED_TRIGGER`, and `burstVenusSeed()`
+throws its shards along the player's bearing so one is always aimed straight down it. Fuse,
+turn rate, speed and shard count (4, or 6 at full pressure) are all set by the firing bloom.
+
+### Venus ordnance
+
+Every hostile shape is drawn at the origin with its nose along `-Y`, already translated and
+rotated by the caller, and shared between the Venus waves and the Venus boss so the two
+chapters can never disagree: `drawSulfurRazor()` (the skimmer's swept blade — it replaced a
+stroked half-circle that read as a piece of macaroni), `drawAcidDart()`, `drawAcidGlobule()`,
+`drawVenusSeed()` (a spiked mine with a visible fuse ring) and `drawHeatShard()`. The rule
+for all of them: dark outline shape, coloured body inset inside it, white-hot core, and a
+silhouette that points where it is going. `VENUS_TRAILS` gives each kind an ember colour so a
+shot leaves a streak of burning air behind it.
 
 **Why the mix matters:** the old game had only grunts firing bullets that homed forever but
 only while `y < H`, so a player could park in a corner and never be touched. Chargers come to
@@ -169,9 +319,11 @@ Primary weapon (`selectedWeapon`):
   visible in flight. Charge state lives in `chargeStartedAt` / `chargeDirection`.
 - `cone` — three 1-damage shots at ±0.16 rad, `fireCooldown = 18`. `fireCone()` reserves
   capacity for the entire volley before firing, so the projectile cap can never emit a partial burst.
-- `tech0` — a cyan post-Mercury reward with a 60-frame (one-second) firing cycle. The projectile
-  deals 3 damage on direct impact, then walks a 0.5-damage chain through as many as four
-  additional living enemies within 230px of each previous target. Multiple projectiles are no
+- `tech0` — a cyan post-Mercury reward with a 40-frame (~0.7-second) firing cycle. The projectile
+  flies 1.4× faster than other rounds, deals 3 damage on direct impact, then walks a 1-damage
+  chain through as many as five additional living enemies within 260px of each previous target,
+  including Mercury's brood in boss fights — enough to drop smaller enemies outright.
+  A ready ping and muzzle flash mark each recharged cycle. Multiple projectiles are no
   longer blocked by an active arc.
 
 While charging, `drawChargeAura()` pulls segmented orange energy arcs toward the ship. At full
@@ -179,7 +331,7 @@ charge the arcs ignite into a tighter orbit while `drawPlayer()` applies a subtl
 the full-power round draws a two-layer flame tail and leaves hot ember particles.
 
 Super (`selectedSuper`), fired by a **short** Space tap when `superMeter >= 1`:
-- `bomb` — projectile with a 125px blast radius (15 damage to the boss). `bombBlasts` keeps its
+- `bomb` — projectile with a 210px blast radius (24 damage to the boss). `bombBlasts` keeps its
   layered shockwaves, spokes, hot core and debris alive after the projectile is consumed.
 - `invincibility` ("SHIELD") — 180 frames of `playerInvulnerable` + `invincibilitySuperTimer`.
 - `lance` ("TECHNOLOGY") — a piercing beam locked to the direction fired but anchored to the ship, so it
@@ -187,14 +339,48 @@ Super (`selectedSuper`), fired by a **short** Space tap when `superMeter >= 1`:
   centre line every `BEAM_TICK` frames. Replaced the old `void` super, which was never
   implemented — it spawned a bomb flagged `void: true` that nothing read.
 
+Six more come straight off the design sheet, with the sheet's own meter costs:
+- `star` (45) — `fireSuperStar()`. A big star thrown along `facing` that ricochets off all four
+  walls for `STAR_FRAMES` (6s), dealing `STAR_DAMAGE` on contact with a `STAR_HIT_COOLDOWN`
+  between hits so it cannot melt one target in a single pass.
+- `mirror` (55) — the most expensive super in the game to charge: `activateMirror()`. For `MIRROR_FRAMES` (5s) a hex shield rides the hull and
+  `tryMirrorReflect()` swaps any hostile round inside `MIRROR_RADIUS` for a player-owned one
+  that homes at the nearest target. Anything it catches never reaches the hull, which is what
+  makes it defensive as well as offensive.
+- `drone` (40) — `launchDrone()`. A steerable warhead: while `superDrone` is alive the arrow
+  keys turn it instead of firing (one guard in `drawGame`, one in `releaseChargeShot`), and
+  `detonateDrone()` ends it with a `DRONE_BLAST` shockwave worth `DRONE_BOSS_DAMAGE`.
+- `decoy` (30) — `deployDecoy()`. A 3 HP hologram of the ship. Every hostile aim in the game
+  reads `aimTargetX()` / `aimTargetY()` rather than `player` directly, so the decoy takes the
+  arena's attention — grunts, chargers, turrets, skimmers, blooms, minions, homing rounds and
+  the boss's own lead-aim. `tryDecoyIntercept()` lets it eat projectiles; `popDecoy()`
+  detonates it. The sheet gives it no duration, so it also burns down over `DECOY_FRAMES`
+  (15s) — a decoy nothing shoots at would otherwise hold aggro forever.
+- `firstaid` (55) — `useFirstAid()`. `+AID_HEAL` hearts, capped at `MAX_DRAWN_HEARTS`. It is
+  refused (and costs nothing) at full health.
+- `orb` (25) — `summonRadiantOrb()`. A small sun that stays where it was cast for `ORB_FRAMES`
+  (4s), firing `ORB_SPOKES` rounds every `ORB_FIRE_EVERY` frames and vaporising anything that
+  touches it.
+
+**All six are arena-agnostic.** A wave, a boss fight and the test room are three separate
+update loops, so instead of writing each super three times everything hostile is described
+through one adapter: `collectSuperTargets()` fills the pooled `SUPER_TARGETS` array with
+`{x, y, r, ref, kind}` and `hurtSuperTarget()` / `vaporizeSuperTarget()` route damage back to
+whichever system owns the target. `updateSuperEntities(t)` is called once per arena, next to
+`updateSuperBeam(t)`, and `clearSuperEntities()` is the single teardown.
+
 Meter math is in `updateSuperMeter()`: `(superDamage - lastSuperKills) / requiredDamage`,
-with costs in `SUPER_COST` (22 Bomb, 36 Shield, 33 Technology). `setSelectedSuper()` refunds half on a
-mid-game swap.
+with costs in `SUPER_COST` (40 Bomb, 52 Shield, 48 Technology, 45 Star, 55 Mirror,
+40 Drone, 30 Decoy, 55 First-Aid, 25 Radiant Orb). `setSelectedSuper()` refunds half on a
+mid-game swap. The bomb's reach and boss damage live in `BOMB_RADIUS` (160) and
+`BOMB_BOSS_DAMAGE` (15) so the tiles, the armory stats, both arenas and the test room cannot
+drift apart.
 
 When the meter is full, `drawPlayer()` adds a tight, pulsing neon outline directly around the
 cached `PLAYER_HULL` path in the selected super's color. `WEAPON_COLORS` and `SUPER_COLORS`
 give every player attack a stable palette: yellow Blaster, orange Charge, green Cone, blue Bomb,
-yellow Shield, purple Technology, and cyan Tech.0. The hull and general menu chrome still use
+yellow Shield, purple Technology, cyan Tech.0, gold Star, ice-blue Mirror, orange Drone, green
+Decoy, red First-Aid and amber Radiant Orb. The hull and general menu chrome still use
 `playerColor`.
 
 ## Input
@@ -209,6 +395,8 @@ yellow Shield, purple Technology, and cyan Tech.0. The hull and general menu chr
   weapons fire at one-third their normal rate. Shot damage is unchanged.
 - `Space` **tap** (≤180ms) — fire super. The hold/tap split is `spaceDownAt` vs `performance.now()`.
 - `Esc` — pause.
+- Touch devices get two analog pads: the left pad drives movement and the right pad aims and fires. Charge begins once the aim pad leaves its dead zone and fires on release. Dedicated buttons activate Super, hold Shrink, and open Pause. The viewport locks scaling, `gesturestart`/playfield `touchmove` guards kill iOS pinch-zoom and pull-to-refresh without breaking menu scrolling, `syncWakeLock()` holds the screen awake only mid-run, and hiding the tab auto-pauses via the existing `visibilitychange` handler.
+- The touch deck is kept outside the player's movement bounds so the ship cannot disappear beneath a thumb. `resize()` reflows active actors after rotation or dynamic mobile-browser viewport changes.
 - `blur` — clears all keys so the ship doesn't drift when the tab loses focus.
 - Outside active gameplay, arrow keys move focus spatially through the menu, audio controls,
   loadout grids, pause screen and victory choices. Enter/Space activates the focused control;
@@ -235,9 +423,23 @@ Typed into the ADMIN CODE box on the menu (`admin-submit` handler):
   super update `--weapon-color` / `--super-color` for the combat HUD.
 - **HUD.** Hearts (`setLives()`, rebuilt only when the count changes so the beat animation
   doesn't restart), wave number centred, score right.
-- **Pause.** Escape calls `setPaused()`, which shows `#pause-screen` (RESUME / CONTROLS / AUDIO / MAIN MENU) and
+- **Death screens never take focus.** `endGame()` shows GAME OVER (or a boss's defeat card)
+without calling `focusMenuDefault()`. The player has just died with a movement key held, so a
+programmatic `focus()` trips the browser's focus-visible heuristic and paints a highlight ring
+on TRY AGAIN that a mouse user never asked for. Focus is adopted on the player's first actual
+keyboard input instead: `moveMenuFocus()` already did this for arrow keys, and `adoptMenuFocus()`
+does it for Enter and Space — consuming that first press rather than activating, so a mashed
+Space at the moment of death cannot restart the run. Every other screen still self-focuses,
+because those are all reached by a deliberate click.
+
+**GAME OVER layout.** The message and the two buttons are three independently positioned
+elements. They are offset from a shared `top: 50%` by their measured heights so the *stack* is
+centred; the old 58%/68% button positions centred only the message and let the group hang low.
+
+**Pause.** Escape calls `setPaused()`, which shows `#pause-screen` (RESUME / CONTROLS / AUDIO / MAIN MENU) and
   ducks the music. `returnToMenu()` is the single teardown path shared by the pause card and the
   game-over button.
+- **Mobile.** `.touch-capable` is set from coarse-pointer/max-touch detection. Responsive rules cover phones and tablets in portrait and landscape, respect safe-area insets, enlarge coarse-pointer targets, and make every oversized menu/result card independently scrollable.
 - **Audio controls.** The menu and pause card each use a centered, text-only AUDIO button for
   synchronized Music and Game SFX sliders
   plus a global mute toggle inside a collapsed drawer. Preferences are stored under `petros-space-adventure-audio`
@@ -255,7 +457,7 @@ Typed into the ADMIN CODE box on the menu (`admin-submit` handler):
 `SCHEDULE_AHEAD` seconds in advance of the AudioContext clock — plain `setInterval` jitters
 audibly. Four tracks (`menu`, `battle`, `boss`, `victory`) are 16-step patterns per bar in MIDI
 numbers, played through synthesised voices: filtered saw/square bass with a sub, plucked arp,
-doubled lead, and noise-based kick/snare/hat. `victory` is `once: true` and stops itself.
+doubled lead, and noise-based kick/snare/hat. `victory` loops through reward and victory menus.
 
 Everything routes through `musicGain` / `sfxGain` and then `masterGain` off one
 `ensureAudio()` context. Browsers
@@ -270,15 +472,19 @@ EQUIPPED flag on the active tile), the victory-screen choices, and the loadout r
 menu button and panel footer. Nothing else touches the `.selected` class; go through
 `setSelectedWeapon()` / `setSelectedSuper()`.
 
-The first three primaries stay in the fixed grid. `primary-more-toggle` expands
-`extra-primary-guns`, which currently contains Tech.0 and keeps added primaries from widening the
-panel beyond the viewport. Opening the panel auto-expands the section when Tech.0 is equipped.
+`setupWeaponBook()` arranges the original weapon buttons into a partially filled shelf.
+Each spine selects a weapon and renders its overview on the left and full icon on the right.
+Folded-corner navigation switches between primary and super pages with a short page turn.
+All four primaries fit in the shelf, replacing the old more-primary drawer; future overflow scrolls.
+`BOOK_ENTRIES` supplies descriptions and stats, and `renderWeaponBook()` paints the active page.
 
 Mercury progression is stored under `petros-space-adventure-mercury-rewards`. Before the first
 victory, the Grey ship swatch and Tech.0 tiles remain visibly locked and open the Mercury reward
-prompt when selected. `showVictory()` calls `unlockMercuryRewards()` before painting the victory
-loadout, so Tech.0 can be equipped immediately on that screen and both rewards stay available on
-future visits.
+prompt when selected. Mercury victory first opens a standalone reward screen: the lock opens,
+Tech.0 and Grey ship illustrations appear, then Continue opens the victory/loadout screen.
+Grey remains selectable through the menu ship colors. Both rewards persist across visits.
+The armory uses narrow icon-only book spines with embossed binding bands and unused shelf space;
+full previews inherit both loadout color tokens so gradient icons remain visible.
 
 ## Conventions
 
