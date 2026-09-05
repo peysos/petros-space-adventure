@@ -2,13 +2,14 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#05060a" />
   <title>Petros Space Adventure</title>
   <link rel="icon" type="image/svg+xml" href="favicon.svg" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Bangers&family=Press+Start+2P&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="style.css?v=25" />
+  <link rel="stylesheet" href="style.css?v=39" />
 </head>
 <body>
   <canvas id="space-bg"></canvas>
@@ -37,10 +38,10 @@
           <label class="audio-row"><span>GAME SFX</span><input data-audio-control="sfx" type="range" min="0" max="100" step="5" value="90" /><output data-audio-output="sfx">90%</output></label>
         </div>
       </section>
-      <div class="color-selector"><span>SHIP COLOR</span><div class="color-options"><button class="color-choice cyan selected" data-color="#7ef9ff" aria-label="Cyan"></button><button class="color-choice red" data-color="#ff4f4f" aria-label="Red"></button><button class="color-choice green" data-color="#63ff91" aria-label="Green"></button><button class="color-choice yellow" data-color="#ffdc5a" aria-label="Yellow"></button><button class="color-choice pink" data-color="#ff72c8" aria-label="Pink"></button><button class="color-choice grey locked" data-color="#b9b9c0" data-mercury-locked aria-label="Grey ship locked: beat Mercury" aria-disabled="true"></button></div><small class="unlock-note" id="mercury-unlock-note">GREY LOCKED — BEAT MERCURY</small></div>
+      <div class="color-selector"><span>SHIP COLOR</span><div class="color-options"><button class="color-choice cyan selected" data-color="#7ef9ff" aria-label="Cyan"></button><button class="color-choice red" data-color="#ff4f4f" aria-label="Red"></button><button class="color-choice green" data-color="#63ff91" aria-label="Green"></button><button class="color-choice yellow" data-color="#ffdc5a" aria-label="Yellow"></button><button class="color-choice pink" data-color="#ff72c8" aria-label="Pink"></button><button class="color-choice grey locked" data-color="#b9b9c0" data-mercury-locked aria-label="Grey ship locked: beat Mercury" aria-disabled="true"></button></div></div>
       <div class="admin-code"><input id="admin-code" type="text" placeholder="ADMIN CODE" autocomplete="off" /><button id="admin-submit" type="button">OK</button><small id="admin-status"></small></div>
     </div>
-    <button class="changelog-btn" id="changelog-btn" type="button">CHANGE LOG <span>0.1</span></button>
+    <button class="changelog-btn" id="changelog-btn" type="button">CHANGE LOG <span>0.9</span></button>
   </div>
 
   <div class="controls-panel" id="controls-panel" aria-hidden="true">
@@ -52,6 +53,12 @@
       <p><span>PRESS SPACE</span> Super attack</p>
       <p><span>HOLD SPACE</span> Shrink ship</p>
       <p><span>ESC</span> Pause game</p>
+      <div class="touch-help" aria-label="Touch controls">
+        <h3>PHONE &amp; TABLET</h3>
+        <p><span>LEFT STICK</span> Move ship</p>
+        <p><span>RIGHT STICK</span> Aim and fire</p>
+        <p><span>SUPER / SHRINK</span> Tap or hold</p>
+      </div>
     </div>
   </div>
 
@@ -61,6 +68,109 @@
       <h2>CHANGE LOG</h2>
       <p class="changelog-lead">A scrollable history of every tracked Petros Space Adventure release.</p>
       <div class="changelog-history" tabindex="0" aria-label="Change log version history">
+        <div class="changelog-release">
+          <p class="changelog-version">VERSION 0.9</p>
+          <p class="changelog-release-intro">Venus fights back.</p>
+          <section><h3>VENUS WAVES</h3><ul>
+            <li>Waves 6 to 9 now escalate on their own: skimmers fire faster and lead your ship further ahead every wave, and from the middle of the chapter they add a straight third blade so the pair can no longer be split.</li>
+            <li>Acid Skimmers dodge. From wave 7 they read your shots in flight and slip sideways out of the line instead of sitting there.</li>
+            <li>Furnace Blooms walk toward your column, so their seeds start their run from above you.</li>
+            <li>The seed is a hunter now: it steers at your ship the whole way in, arms with a flash and a chirp when it gets close, and bursts along your bearing — one shard always straight at you, six of them at wave 9. Fuse is a third shorter and it leaves the bloom faster.</li>
+          </ul></section>
+          <section><h3>THE VENUS FIGHT</h3><ul>
+            <li>New attack — HUNTER: seeker darts fired one at a time that steer for a long window before committing. It is the only pattern that follows you into a corner.</li>
+            <li>Venus reads you. Hugging a wall pulls the sweep and the pressure ring, standing still pulls the lightning and the seekers, sitting low pulls the dive — and the planet leans much harder toward a ship pinned against an edge.</li>
+            <li>The final phase never gives a single-pattern breather again: it always chains, and the gap between patterns is shorter.</li>
+          </ul></section>
+        </div>
+        <div class="changelog-release">
+          <p class="changelog-version">VERSION 0.8</p>
+          <p class="changelog-release-intro">Six new supers &amp; a real Venus sky.</p>
+          <section><h3>SUPER ATTACKS</h3><ul>
+            <li>STAR (45) throws a giant star that ricochets off every wall for six seconds.</li>
+            <li>MIRROR (55) bounces enemy fire off your hull for five seconds and sends it hunting the nearest enemy. It is the slowest super in the game to charge.</li>
+            <li>DRONE (40) launches a warhead you steer with the arrow keys until it hits something; your guns come back the moment it detonates.</li>
+            <li>DECOY (30) drops a 3 HP hologram of your ship that everything in the arena shoots at instead of you, then explodes.</li>
+            <li>FIRST-AID (55) heals four hearts, and RADIANT ORB (25) plants a small sun that sprays fire for four seconds and vaporises anything that touches it.</li>
+          </ul></section>
+          <section><h3>VENUS</h3><ul>
+            <li>Rebuilt the Venus sky: a burning sun behind the haze, four scrolling cloud decks with lit rims and rolling swells, ash and embers climbing the thermals, and cloud-to-cloud lightning.</li>
+            <li>Redrew every Venus projectile — swept sulfur blades, barbed acid darts, spiked seeds with a visible fuse and sharper heat shards, all trailing burning air. No wave, count or timer was touched.</li>
+          </ul></section>
+        </div>
+        <div class="changelog-release">
+          <p class="changelog-version">VERSION 0.7</p>
+          <p class="changelog-release-intro">Both bosses, rebuilt.</p>
+          <section><h3>BOSS FIGHTS</h3><ul>
+            <li>Mercury and Venus now run three phases, stepping at two thirds and one third health: every attack timer speeds up and the planet visibly tears.</li>
+            <li>Mercury has 110 health and, from phase 2, throws homing chips of itself that must be shot down or dodged.</li>
+            <li>Venus has 210 health, six attacks instead of four — adding a sweeping searchlight and a body slam down your column — picked at random and chained together in the later phases.</li>
+            <li>Venus's clouds churn and drift, and every attack lights the planet in its own colour before it fires so the harder patterns stay readable.</li>
+          </ul></section>
+          <section><h3>SCREENS</h3><ul>
+            <li>Reverted the Venus wave changes: waves 6 to 9 are back exactly as they were.</li>
+            <li>Loading screen is back to LOADING, and the Mercury reward lock is all grey with a proper latch that strains twice before it gives.</li>
+            <li>Reward buttons now toggle — press again to put back what you had. Loadout icons beside the super meter are smaller, spaced further apart and lined up with the bar.</li>
+            <li>Centred the GAME OVER stack, and the retry button no longer highlights itself unless you reach for the keyboard.</li>
+          </ul></section>
+        </div>
+        <div class="changelog-release">
+          <p class="changelog-version">VERSION 0.6</p>
+          <p class="changelog-release-intro">Venus, top to bottom.</p>
+          <section><h3>VENUS</h3><ul>
+            <li>New wave 10 boss: Venus, with 150 health, retrograde cloud decks, a polar vortex, molten fissures that open as it takes damage, and its own heavier theme.</li>
+            <li>Four Venus attacks — an acid downpour with a walking gap, a backwards spiral, warned lightning columns, and a pressure ring with one way out. Each gets harder past half health.</li>
+                      </ul></section>
+          <section><h3>BALANCE &amp; UI</h3><ul>
+            <li>Bomb now deals 15 boss damage across a 160 pixel blast, and every super costs noticeably more meter to charge.</li>
+            <li>The equipped gun and super icons are sized and aligned to the super meter, and hovering one shows a quiet card with its stats.</li>
+            <li>Mercury Rewards now offers a grey EQUIP button for Tech.0 and the Grey Ship, and the menu no longer carries the unlocked notice.</li>
+          </ul></section>
+        </div>
+        <div class="changelog-release">
+          <p class="changelog-version">VERSION 0.5</p>
+          <p class="changelog-release-intro">Venus patterns &amp; reward polish.</p>
+          <section><h3>WHAT'S NEW</h3><ul>
+            <li>Centered loadout icons without boxes, and Petros Games presents..... on pre-game loading.</li>
+            <li>A larger Mercury Rewards title with a grey gift, smoother opening lock, and looping reward music.</li>
+            <li>Wider Venus formations, curved crescent pairs from Skimmers, and timed Furnace Bloom seeds that burst into diagonal shards.</li>
+          </ul></section>
+        </div>
+        <div class="changelog-release">
+          <p class="changelog-version">VERSION 0.4</p>
+          <p class="changelog-release-intro">Armory selection polish.</p>
+          <section><h3>LOADOUT</h3><ul>
+            <li>Uniform book heights, no Equipped tags, and complete glowing outlines on selected and hovered spines.</li>
+            <li>Removed duplicate description stats; Tech.0 now fires every two seconds. Equipped gun and super icons appear beside the super meter.</li>
+            <li>Loadout names use their weapon and super colors, with the plus sign matching the ship.</li>
+            <li>Large icons float gently; separate left/right controls switch the illustration area between icon and damage stats.</li>
+          </ul></section>
+        </div>
+        <div class="changelog-release">
+          <p class="changelog-version">VERSION 0.3</p>
+          <p class="changelog-release-intro">Book spines &amp; reward reveals.</p>
+          <section><h3>PRESENTATION</h3><ul>
+            <li>A separate opening-lock screen reveals Tech.0 and the Grey ship before the Mercury victory loadout. Removed the Grey Ship Equipped button.</li>
+            <li>Rebuilt the armory as narrow, icon-only book spines with binding details, empty shelf space, arcade typography, and folded page controls.</li>
+            <li>Fixed missing colors in enlarged weapon icons and removed the Flight Manual label.</li>
+            <li>Game Over is now red with the regular stars retained and the large warp sparkles removed.</li>
+          </ul></section>
+        </div>
+        <div class="changelog-release">
+          <p class="changelog-version">VERSION 0.2</p>
+          <p class="changelog-release-intro">The Flight Armory &amp; Mercury update.</p>
+          <section><h3>ARMORY &amp; COMBAT</h3><ul>
+            <li>New book-style weapon and super shelves, illustrated descriptions, and animated page turns. Tech.0 uses a standalone cyan lightning bolt.</li>
+            <li>Tech.0 now fires once every three seconds. Aim changes can no longer bypass firing cooldowns.</li>
+            <li>Bomb blasts reach 210 pixels and deal 24 damage to Mercury.</li>
+            <li>Mercury has more expressive anger, hit reactions, attack wind-ups, and defeat poses.</li>
+            <li>First-time Mercury rewards open with an unlocking animation before the armory appears.</li>
+          </ul></section>
+          <section><h3>SCREENS &amp; TOUCH</h3><ul>
+            <li>Added touch movement, aim/fire, Super, Shrink, and Pause controls for phones and tablets.</li>
+            <li>Improved responsive screen sizing, scrollable panels, safe-area spacing, and portrait/landscape layouts.</li>
+          </ul></section>
+        </div>
         <div class="changelog-release">
           <p class="changelog-version">VERSION 0.1</p>
           <p class="changelog-release-intro">The first tracked gameplay and presentation update.</p>
@@ -92,6 +202,7 @@
               <li>Added centered, expandable audio settings, pause-menu controls, and ship-color keyboard focus.</li>
               <li>Renamed the beam super to Technology and gave every loadout tile its own matching palette.</li>
               <li>Moved additional primaries into an expandable section so future weapons stay inside the selector at every screen size.</li>
+              <li>Added responsive phone and tablet layouts, safe-area support, dual touch sticks, and dedicated Super, Shrink, and Pause controls.</li>
             </ul>
           </section>
         </div>
@@ -113,7 +224,7 @@
         <button class="primary-more-toggle" id="primary-more-toggle" type="button" aria-expanded="false" aria-controls="extra-primary-guns">MORE PRIMARY GUNS <span>▼</span></button>
         <div class="extra-primary-guns" id="extra-primary-guns" hidden>
           <div class="weapon-grid">
-            <button class="weapon-tile locked" data-weapon="tech0" data-mercury-locked aria-disabled="true"><span class="tile-badge">EQUIPPED</span><span class="unlock-badge">LOCKED</span><span class="projectile-preview tech0-preview"></span><strong>TECH.0</strong><small>3 impact / 0.5 chain<br>4 hops / 1 second</small></button>
+            <button class="weapon-tile locked" data-weapon="tech0" data-mercury-locked aria-disabled="true"><span class="tile-badge">EQUIPPED</span><span class="unlock-badge">LOCKED</span><span class="projectile-preview tech0-preview"></span><strong>TECH.0</strong><small>3 impact / 1 chain<br>5 hops / 0.7 sec</small></button>
           </div>
         </div>
       </section>
@@ -123,6 +234,12 @@
           <button class="weapon-tile super-tile selected" data-super="bomb"><span class="tile-badge">EQUIPPED</span><span class="projectile-preview bomb-preview"></span><strong>BOMB</strong><small>Large blast</small></button>
           <button class="weapon-tile super-tile" data-super="invincibility"><span class="tile-badge">EQUIPPED</span><span class="projectile-preview shield-preview"></span><strong>SHIELD</strong><small>3 seconds of<br>invincibility</small></button>
           <button class="weapon-tile super-tile" data-super="lance"><span class="tile-badge">EQUIPPED</span><span class="projectile-preview lance-preview"><i></i></span><strong>TECHNOLOGY</strong><small>Piercing beam<br>Burns everything in line</small></button>
+          <button class="weapon-tile super-tile" data-super="star"><span class="tile-badge">EQUIPPED</span><span class="projectile-preview star-preview"></span><strong>STAR</strong><small>Ricochets the map<br>6 seconds</small></button>
+          <button class="weapon-tile super-tile" data-super="mirror"><span class="tile-badge">EQUIPPED</span><span class="projectile-preview mirror-preview"><i></i></span><strong>MIRROR</strong><small>Reflects enemy fire<br>5 seconds</small></button>
+          <button class="weapon-tile super-tile" data-super="drone"><span class="tile-badge">EQUIPPED</span><span class="projectile-preview drone-preview"><i></i><i></i></span><strong>DRONE</strong><small>Steer it with arrows<br>Massive impact</small></button>
+          <button class="weapon-tile super-tile" data-super="decoy"><span class="tile-badge">EQUIPPED</span><span class="projectile-preview decoy-preview"><i></i></span><strong>DECOY</strong><small>3 HP double<br>Pulls every enemy</small></button>
+          <button class="weapon-tile super-tile" data-super="firstaid"><span class="tile-badge">EQUIPPED</span><span class="projectile-preview firstaid-preview"></span><strong>FIRST-AID</strong><small>Heals 4 hearts</small></button>
+          <button class="weapon-tile super-tile" data-super="orb"><span class="tile-badge">EQUIPPED</span><span class="projectile-preview orb-preview"><i></i></span><strong>RADIANT ORB</strong><small>A sun that fires<br>every direction</small></button>
         </div>
       </section>
       <p class="loadout-summary">LOADOUT <strong id="loadout-summary-text">BLASTER + BOMB</strong></p>
@@ -152,14 +269,31 @@
       <div class="hud-slot hud-center"><span class="hud-label">WAVE</span><strong class="wave-value" id="wave-number">1</strong></div>
       <div class="hud-slot hud-right"><span class="hud-label">SCORE</span><strong class="score-value" id="score">000000</strong></div>
     </div>
-    <div class="boss-health" id="boss-health"><span>MERCURY</span><div class="boss-track"><div class="boss-fill" id="boss-fill"></div></div></div>
-    <div class="super-meter"><span>SUPER</span><div class="super-track"><div class="super-fill" id="super-fill"></div></div></div>
+    <div class="boss-health" id="boss-health"><span id="boss-health-name">MERCURY</span><div class="boss-track"><div class="boss-fill" id="boss-fill"></div></div></div>
+    <div class="super-meter"><span>SUPER</span><div class="super-track"><div class="super-fill" id="super-fill"></div></div><div class="hud-loadout" aria-label="Equipped loadout"><span id="hud-weapon-icon" role="img" tabindex="0"></span><span id="hud-super-icon" role="img" tabindex="0"></span><div class="hud-loadout-card" id="hud-loadout-card" aria-hidden="true"><p class="hud-card-name"></p><p class="hud-card-kicker"></p><dl class="hud-card-stats"></dl></div></div></div>
     <div class="game-message" id="game-message"></div>
     <div class="test-damage" id="test-damage"></div>
     <div class="charge-meter" id="charge-meter"><span>CHARGE</span><div class="charge-track"><div class="charge-fill" id="charge-fill"></div></div></div>
     <div class="wave-banner" id="wave-banner"><span class="wave-banner-main" id="wave-banner-main"></span><span class="wave-banner-sub" id="wave-banner-sub"></span></div>
     <button class="try-again-btn" id="try-again-btn" type="button">TRY AGAIN</button>
     <button class="main-menu-btn" id="main-menu-btn" type="button">MAIN MENU</button>
+    <button class="mobile-pause-btn" id="mobile-pause-btn" type="button" aria-label="Pause game"><i></i><i></i><span>PAUSE</span></button>
+    <div class="mobile-controls" id="mobile-controls" aria-label="Touch game controls">
+      <div class="touch-stick" data-touch-stick="move" role="group" aria-label="Movement stick">
+        <span class="touch-stick-ring"></span>
+        <span class="touch-stick-knob"></span>
+        <b>MOVE</b>
+      </div>
+      <div class="mobile-actions">
+        <button class="mobile-action super-action" id="mobile-super-btn" type="button"><span>SUPER</span></button>
+        <button class="mobile-action shrink-action" id="mobile-shrink-btn" type="button"><small>HOLD</small><span>SHRINK</span></button>
+      </div>
+      <div class="touch-stick aim-stick" data-touch-stick="aim" role="group" aria-label="Aim and fire stick">
+        <span class="touch-stick-ring"></span>
+        <span class="touch-stick-knob"></span>
+        <b>AIM / FIRE</b>
+      </div>
+    </div>
   </div>
 
   <!-- Pause -->
@@ -182,7 +316,7 @@
   </div>
 
   <div class="damage-flash" id="damage-flash"></div>
-  <div class="boss-intro" id="boss-intro"><div class="boss-intro-card"><div id="boss-player-name">PLAYER</div><div class="versus">VS</div><div class="mercury-name">MERCURY</div><button id="continue-boss" type="button">CONTINUE</button><p class="key-hint">PRESS <span>ENTER</span> OR <span>SPACE</span></p></div></div>
+  <div class="boss-intro" id="boss-intro"><div class="boss-intro-card"><div id="boss-player-name">PLAYER</div><div class="versus">VS</div><div class="mercury-name" id="boss-intro-name">MERCURY</div><button id="continue-boss" type="button">CONTINUE</button><p class="key-hint">PRESS <span>ENTER</span> OR <span>SPACE</span></p></div></div>
 
   <div class="victory-screen" id="victory-screen" aria-hidden="true">
     <div class="victory-rays" aria-hidden="true"></div>
@@ -212,6 +346,12 @@
           <button class="victory-choice selected" data-victory-super="bomb" type="button">BOMB</button>
           <button class="victory-choice" data-victory-super="invincibility" type="button">SHIELD</button>
           <button class="victory-choice" data-victory-super="lance" type="button">TECHNOLOGY</button>
+          <button class="victory-choice" data-victory-super="star" type="button">STAR</button>
+          <button class="victory-choice" data-victory-super="mirror" type="button">MIRROR</button>
+          <button class="victory-choice" data-victory-super="drone" type="button">DRONE</button>
+          <button class="victory-choice" data-victory-super="decoy" type="button">DECOY</button>
+          <button class="victory-choice" data-victory-super="firstaid" type="button">FIRST-AID</button>
+          <button class="victory-choice" data-victory-super="orb" type="button">RADIANT ORB</button>
         </div>
       </div>
       <button id="victory-continue" type="button">CONTINUE</button>
@@ -228,13 +368,25 @@
         <span class="laugh-eye laugh-eye-right"></span>
         <span class="laugh-mouth"><i></i></span>
       </div>
-      <div class="defeat-title">MERCURY WINS</div>
-      <blockquote>“I'm closest to the sun<br />but will ruin all your fun.”</blockquote>
+      <div class="defeat-title" id="defeat-title">MERCURY WINS</div>
+      <blockquote id="defeat-quote">“I'm closest to the sun<br />but will ruin all your fun.”</blockquote>
       <button id="defeat-retry" type="button">TRY AGAIN</button>
       <button id="defeat-menu" class="ghost" type="button">MAIN MENU</button>
     </div>
   </div>
 
-  <script src="main.js?v=25"></script>
+  <div class="reward-screen" id="reward-screen" role="dialog" aria-modal="true" aria-labelledby="reward-title" aria-hidden="true" tabindex="-1">
+    <div class="reward-screen-card">
+      <p class="reward-eyebrow"><svg class="reward-gift" viewBox="0 0 48 48" aria-hidden="true"><path d="M7 22h34v21H7zM4 15h40v9H4z" fill="#999aa5" stroke="#e1e1e7" stroke-width="2"/><path d="M24 15v28M24 15C6 16 8 2 16 6c5 2 8 9 8 9Zm0 0c18 1 16-13 8-9-5 2-8 9-8 9Z" fill="none" stroke="#e1e1e7" stroke-width="4" stroke-linejoin="round"/></svg>MERCURY REWARDS</p>
+      <i class="reward-lock" aria-hidden="true"></i>
+      <h2 id="reward-title">UNLOCKED!</h2>
+      <div class="reward-items">
+        <div><span class="projectile-preview tech0-preview" aria-hidden="true"></span><h3>TECH.0</h3><p>CHAIN LIGHTNING</p><button class="reward-equip" id="reward-equip-tech0" type="button">EQUIP</button></div>
+        <div><span class="reward-ship" aria-hidden="true"></span><h3>GREY SHIP</h3><p>NEW SHIP COLOR</p><button class="reward-equip" id="reward-equip-grey" type="button">EQUIP</button></div>
+      </div>
+      <button id="reward-continue" type="button" disabled>CONTINUE</button>
+    </div>
+  </div>
+  <script src="main.js?v=42"></script>
 </body>
 </html>
