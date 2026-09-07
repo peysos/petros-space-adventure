@@ -99,6 +99,15 @@ button { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
 .credits-present i:nth-child(3) { animation-delay: 1.5s; }
 .credits-present i:nth-child(4) { animation-delay: 1.75s; }
 .credits-present i:nth-child(5) { animation-delay: 2.0s; }
+.credits-hint {
+  margin-top: 34px;
+  font-family: var(--pixel);
+  font-size: clamp(0.4rem, 1.2vw, 0.65rem);
+  letter-spacing: 3px;
+  color: var(--dim);
+  opacity: 0;
+  animation: creditsIn 0.6s ease-out 1.3s forwards, buttonBlink 1.6s steps(1) 1.3s infinite;
+}
 @keyframes creditsIn { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
 @keyframes dotIn { to { opacity: 1; } }
 
@@ -594,12 +603,38 @@ button:focus-visible, input:focus-visible {
 .charge-meter.full { color: var(--weapon-color); text-shadow: 0 0 14px var(--weapon-color); }
 .charge-meter.full .charge-track { border-color: var(--weapon-color); box-shadow: 0 0 18px rgba(var(--weapon-rgb), 0.7); }
 
-.boss-health { display: none; position: absolute; top: 72px; left: 50%; width: min(460px, 70vw); transform: translateX(-50%); color: #c8c8cf; font-size: 0.62rem; letter-spacing: 5px; text-align: center; text-shadow: 0 0 12px rgba(200, 200, 210, 0.72); }
+.boss-health { display: none; position: absolute; top: 96px; left: 50%; width: min(460px, 70vw); transform: translateX(-50%); color: #ff4f91; font-size: 0.62rem; letter-spacing: 5px; text-align: center; text-shadow: 0 0 12px rgba(255, 79, 145, 0.8); transition: color 0.4s ease, text-shadow 0.4s ease; }
 .boss-health.visible { display: block; }
-.boss-track { height: 14px; margin-top: 8px; border: 2px solid #a9a9b2; background: rgba(190, 190, 202, 0.08); }
-.boss-fill { width: 0%; height: 100%; background: repeating-linear-gradient(90deg, #c8c8cf 0 6px, #777780 6px 9px); box-shadow: 0 0 14px rgba(190, 190, 205, 0.64); }
+.boss-track { position: relative; height: 14px; margin-top: 8px; border: 2px solid #ff4f91; background: rgba(255, 79, 145, 0.08); transition: border-color 0.4s ease, background 0.4s ease; }
+/* Hard dividers at 25/50/75% so the bar reads as a 4-phase fight, not a plain gauge */
+.boss-track::after {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(to right,
+    transparent calc(25% - 1px), rgba(0, 0, 0, 0.55) calc(25% - 1px), rgba(0, 0, 0, 0.55) calc(25% + 1px), transparent calc(25% + 1px),
+    transparent calc(50% - 1px), rgba(0, 0, 0, 0.55) calc(50% - 1px), rgba(0, 0, 0, 0.55) calc(50% + 1px), transparent calc(50% + 1px),
+    transparent calc(75% - 1px), rgba(0, 0, 0, 0.55) calc(75% - 1px), rgba(0, 0, 0, 0.55) calc(75% + 1px), transparent calc(75% + 1px));
+}
+.boss-fill { width: 0%; height: 100%; background: repeating-linear-gradient(90deg, #ff4f91 0 6px, #8a2450 6px 9px); box-shadow: 0 0 14px rgba(255, 79, 145, 0.7); transition: background 0.4s ease, box-shadow 0.4s ease; }
 .boss-health.filling .boss-fill { animation: bossHealthFill 1.6s steps(24) forwards; }
 @keyframes bossHealthFill { from { width: 0%; } to { width: 100%; } }
+
+/* Phase color ramp: the bar's temperature climbs through the same palette as the
+   molten cracks on the planet itself, so it previews what you're about to see. */
+.boss-health[data-stage="1"] { color: #ffb03c; text-shadow: 0 0 12px rgba(255, 176, 60, 0.8); }
+.boss-health[data-stage="1"] .boss-track { border-color: #ffb03c; background: rgba(255, 176, 60, 0.08); }
+.boss-health[data-stage="1"] .boss-fill { background: repeating-linear-gradient(90deg, #ffb03c 0 6px, #7a4400 6px 9px); box-shadow: 0 0 14px rgba(255, 176, 60, 0.7); }
+
+.boss-health[data-stage="2"] { color: #ff6a20; text-shadow: 0 0 12px rgba(255, 106, 32, 0.85); }
+.boss-health[data-stage="2"] .boss-track { border-color: #ff6a20; background: rgba(255, 106, 32, 0.1); }
+.boss-health[data-stage="2"] .boss-fill { background: repeating-linear-gradient(90deg, #ff6a20 0 6px, #7a1e00 6px 9px); box-shadow: 0 0 16px rgba(255, 106, 32, 0.8); }
+
+.boss-health[data-stage="3"] { color: #fff3c4; text-shadow: 0 0 14px rgba(255, 220, 90, 0.95); }
+.boss-health[data-stage="3"] .boss-track { border-color: #ffdc5a; background: rgba(255, 220, 90, 0.12); }
+.boss-health[data-stage="3"] .boss-fill { background: repeating-linear-gradient(90deg, #fff3c4 0 6px, #b33c00 6px 9px); box-shadow: 0 0 18px rgba(255, 220, 90, 0.9); }
+
+/* A phase boundary gets a hard flash, distinct from the constant per-hit flicker */
+.boss-health.phase-flash .boss-fill { animation: bossPhaseFlash 0.5s steps(5); }
+@keyframes bossPhaseFlash { 0% { filter: brightness(1); } 30% { filter: brightness(2.8); } 100% { filter: brightness(1); } }
 
 .damage-flash { position: fixed; inset: 0; z-index: 8; pointer-events: none; background: rgba(255, 0, 0, 0.42); opacity: 0; }
 .damage-flash.active { animation: damageFlash 0.28s steps(4); }

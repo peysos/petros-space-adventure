@@ -3,6 +3,199 @@
 A browser-based, single-file-per-concern arcade shooter. No build step, no dependencies,
 no package manager — plain HTML + CSS + a single `<canvas>` game loop in vanilla JS.
 
+## Which copy of this project to edit — READ FIRST
+
+There are two checkouts of this game on disk with the same git history, and Claude Code
+sessions frequently launch in the **wrong** one. Edits to the wrong copy are invisible to
+the user: the page they are looking at never changes, and the session ends up debugging a
+caching problem that does not exist.
+
+| Path | Status |
+| --- | --- |
+| `~/Developer/experiment-ai-websites/Petros Space Adventure` | **Live.** This is what the local server serves and what other agents edit. |
+| `~/Developer/petros-space-adventure-main` | Stale clone. Sessions often launch here. Do not edit. |
+
+**Before the first edit of every session**, confirm the target directory is the one being
+served, and never assume the launch directory is it:
+
+```bash
+# prints "port -> document root" for every local static server that is listening
+lsof -nP -iTCP -sTCP:LISTEN | awk 'NR>1 && $1 ~ /[Pp]ython|node|ruby|php/ {print $2, $9}' |
+  sort -u | while read pid port; do
+    echo "$port -> $(lsof -a -d cwd -p "$pid" -Fn | tail -1 | cut -c2-)"
+  done
+```
+
+Edit the files under the document root it prints. If no server is running, ask the user
+which copy they are viewing rather than guessing.
+
+Then verify the change actually reached the browser before reporting it done — reading the
+file back proves nothing, because the file you read may not be the file being served:
+
+```bash
+curl -s http://localhost:<port>/index.html | grep <the thing you changed>
+```
+
+Two follow-on rules:
+
+- **Do not mirror edits into both copies.** One live copy, one edit. Copying to the stale
+  clone creates divergent history that has to be untangled later. This section, the no-change-log
+  rule and the roadmap below it are the one deliberate exception — they live in both copies'
+  `CLAUDE.md` because a session launched in the stale clone only ever reads that copy's file.
+- **Static assets need a cache bust like scripts do.** `index.html` versions its CSS and JS
+  with `?v=` query strings; `favicon.svg` and `apple-touch-icon.png` need the same treatment,
+  because browsers cache favicons far more aggressively than any other asset and will keep
+  showing the old icon through an ordinary reload.
+
+## There is no change log — READ FIRST
+
+The game no longer tracks releases. The hand-written CHANGE LOG button and its version-history
+panel are gone. The build is marked **ALPHA** in two places instead — a chip after SPACE ADVENTURE
+in the title (`.dev-tag`) and a static stamp in the bottom-left corner of the menu (`.alpha-tag`) —
+and neither needs updating when work lands.
+
+**So: do not write release notes, do not add version entries, and do not reinstate the panel.**
+The whole build is alpha, and that is the only thing the player is told. If a session wants to
+record what changed, the git history is the place for it.
+
+Two corners of the menu, one shared box: `.alpha-tag` on the left and `.reset-btn` on the right
+(the dev reset). They share one CSS rule so they stay the same size as each other; keep it that way.
+
+Both ALPHA marks are buttons and both open `#alpha-panel`, the card that tells the player what is
+being built and asks for patience. Update its `.alpha-pips` and `2 OF 11 CHAPTERS PLAYABLE` line
+when a chapter ships. Every rule for that card is double-classed `.controls-card.alpha-card ...`
+because it reuses the `.controls-card` shell, whose `p` styling is written for the CONTROLS list. Both, plus `.dev-tag`, read `--theme` / `--theme-rgb`, so the build markings
+re-skin with the ship colour like the rest of the menu chrome.
+
+
+## Roadmap — the eleven chapters
+
+The game is going from two bosses to eleven: a full run from Earth out to the Sun, built **one
+chapter at a time** across many sessions. This section is the agreed plan. Take the order, the
+colour and the reward for a chapter from the table rather than inventing them — otherwise each
+session picks a clashing swatch or hands out a reward another chapter already owns.
+
+Settled: textbook planet order, so Mercury and Venus keep their current slots and their current
+balance; the Sun is the true final boss; the six currently-free supers become boss rewards and are
+locked for everyone; four waves then a boss in every chapter; a launch screen lets a player resume
+at any chapter they have cleared.
+
+Line numbers are deliberately absent below — `main.js` is edited often and by more than one agent,
+so everything is named by symbol. Grep for the name.
+
+### The sequence
+
+| # | Chapter | Waves | Boss wave | Boss HP | Ship colour | Gear |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | MOON | 1–4 | 5 | 70 | Bone White `#e9e6dc` | DECOY |
+| 2 | MERCURY | 6–9 | 10 | 110 *(unchanged)* | Grey `#b9b9c0` *(exists)* | TECH.0 *(exists)* |
+| 3 | VENUS | 11–14 | 15 | 250 *(unchanged)* | Magma Red `#ff5040` *(exists)* | MAGMA *(exists)* |
+| 4 | MARS | 16–19 | 20 | 300 | Rust `#d2613a` | DRONE |
+| 5 | THE BELT | 21–24 | 25 | 340 | Ore `#a98f63` | STAR |
+| 6 | JUPITER | 26–29 | 30 | 420 | Amber `#f0b667` | RADIANT ORB |
+| 7 | SATURN | 31–34 | 35 | 460 | Ring Gold `#cbb583` | MIRROR |
+| 8 | URANUS | 36–39 | 40 | 520 | Aqua `#7fe3d0` | FIRST-AID |
+| 9 | NEPTUNE | 41–44 | 45 | 580 | Abyss `#3f63d8` | GALE *(new gun)* |
+| 10 | PLUTO | 46–49 | 50 | 640 | Ice Violet `#b9a6f0` | STASIS *(new super)* |
+| 11 | THE SUN | 51–54 | 55 | 900 | Solar `#fff0c4` | CORONA *(new super)* |
+
+Only three pieces of gear are new. Chapters 1–8 hand out supers that already exist and only need a
+lock put on them — that is what makes eleven chapters affordable at all.
+
+### What each chapter is
+
+The reward is the planet's own mechanic, so beating a boss hands you the thing that just beat you.
+Build the fight to match:
+
+- **Moon** — Earth's double, and the tutorial boss: few shots, mostly falling rock. Its reward drops
+  a double of your ship.
+- **Mercury** — as it is today.
+- **Venus** — as it is today.
+- **Mars** — the planet we have only ever visited by sending machines ahead of us; dust storms hide
+  the body. Its reward steers a probe.
+- **The Belt** — not a planet. Tumbling rock ricocheting off the arena walls, and STAR is the super
+  that ricochets off every wall.
+- **Jupiter** — the Great Red Spot as an eye: a storm that has been spraying for centuries, which is
+  exactly what RADIANT ORB plants.
+- **Saturn** — the rings *are* the fight; they deflect what you shoot into them. MIRROR is already
+  the slowest super in the game to charge, which suits a chapter-7 prize. (Mercury deliberately has
+  no rings — Saturn is where rings finally arrive.)
+- **Uranus** — tipped 98° on its side, so the arena itself is rotated. The weakest thematic reward
+  link of the eleven; its hook is the fight, not the prize.
+- **Neptune** — the fastest winds in the solar system. The chapter shoves your ship constantly, and
+  the gun you win is that wind.
+- **Pluto** — cold, distant, demoted. STASIS freezes every enemy and every bullet for three seconds.
+- **The Sun** — the finale, and the last ship colour.
+
+**Colour constraints.** The four free swatches are cyan `#7ef9ff`, green `#63ff91`, yellow `#ffdc5a`
+and pink `#ff72c8`. Ship colour drives `--theme` for the whole UI, so a new swatch has to work as a
+text accent and not only as a dot — check Bone White and Solar against white type. The pairs to keep
+apart are Saturn against the free yellow, and Mars against Jupiter. The swatch row in `index.html`
+holds six today and has to become a wrapping grid before it holds fifteen.
+
+### Building one chapter
+
+What a chapter costs, and what to copy for each part:
+
+| Part | Copy from |
+| --- | --- |
+| Boss body, lit rock with damage-revealed cracks | `drawMercury` |
+| Boss body, banded gas giant | `drawVenus` |
+| A pattern set | `VENUS_ATTACKS` / `pickVenusAttack` / `startVenusAttack` / `queueVenusShot` |
+| Chapter backdrop | `drawVenusEnvironment`, `VENUS_DECKS`, `buildVenusAtmosphere` |
+| Ordnance shared by a chapter's mooks *and* its boss | `fireVenusShot` / `drawVenusSeed` / `burstVenusSeed` |
+| Enemies | add to `ENEMY_TYPES`, extend `waveRoster` and `WAVE_INTROS` |
+| Music | add a `TRACKS` entry — `music.play(name)` is already generic |
+
+Already shared, needing no per-boss work: `drawBossShards`, and the whole phase / `damageBoss` /
+`startBossDeath` / `updateBossDeath` / `finishBossDeath` chain.
+
+### The traps
+
+The code was written for exactly two bosses and says so in a dozen places. A session that does not
+know this will quietly add a *third* copy of a two-copy pattern:
+
+- **There is no chapter or boss registry.** "Which planet is this" is `bossKind === "venus" ? A : B`,
+  repeated at roughly thirty call sites.
+- **Wave boundaries are magic numbers** — `wave === 5` and `wave === 9` in the wave-clear check, and
+  `wave = 6` / `wave = 11` in `finishBossDeath`.
+- **Every reward concern exists twice** — `MERCURY_UNLOCK_KEY` / `VENUS_UNLOCK_KEY`, two loaders,
+  `unlockMercuryRewards` / `unlockVenusRewards`, `syncMercuryRewardUI` / `syncVenusRewardUI`, two
+  `.reward-mercury` / `.reward-venus` blocks in `index.html`, four `#reward-equip-*` handlers, and
+  `data-mercury-locked` / `data-venus-locked` on swatches, weapon tiles and victory choices.
+- **`openMercuryLockPanel` is the worst offender** — its name is the tell. A binary `venus ? A : B`
+  already stretched past its design, with three call sites that each test two attributes.
+- **No super has ever been locked.** `setSelectedWeapon` hardcodes its `tech0` / `magma` flag checks;
+  `setSelectedSuper` has *no* lock check at all, and its click handlers equip unconditionally. The
+  Moon chapter has to build that machinery.
+- **The two bosses are not the same shape.** Venus has a real per-frame driver, `updateVenusBoss`;
+  Mercury's drift, minions, radial burst and aimed shots are inlined into the shared `drawBossArea`
+  dispatcher. Extract `updateMercuryBoss` the first time you touch that dispatcher — until both
+  bosses look alike there is no shape for a third to copy.
+- **Venus bolts on about fifteen flat globals** (`venusSpin`, `venusAttack`, `venusQueue`,
+  `venusDive`, …). A third prefix bank is not viable; move per-boss state into one object the first
+  time a third boss needs state of its own.
+- **Post-boss flow is inconsistent** — Mercury goes reward screen → victory/loadout screen → play,
+  Venus goes reward screen → play. Pick one and use it for all eleven; the loadout screen after every
+  boss is the better fit now that every boss grants gear.
+- **Live bug:** `updateBossDeath` spawns its debris using `BOSS_RADIUS` — Mercury's 78 — instead of
+  `bossRadius()`, so Venus's 96px body already scatters death debris at the wrong scale and every new
+  boss inherits it. Fix it whenever you are next in that function.
+
+**The standing rule: build chapters one at a time, but never add a third copy of a two-copy pattern.**
+When a chapter walks you into one of the traps above, generalise *that one thing* into a table right
+then — the piece in your way, not the whole engine.
+
+### Not built yet, and the roadmap needs both
+
+- **Launch screen.** A chapter select gated on bosses beaten, so a player can resume at any chapter
+  they have cleared instead of replaying forty waves. Reuses the `.controls-panel` shell, the arrow-key
+  spatial focus navigation the menu already has, and the existing `.locked` / padlock CSS. Its rows
+  must come from the chapter data — hand-written rows would recreate the duplication above.
+- **Progress record.** One `localStorage` record of cleared chapters, replacing the two per-planet
+  keys, reading the old keys once so existing Mercury and Venus unlocks carry over. `resetAllProgress`
+  clears it.
+
 ## Files
 
 | File | Role |
@@ -10,7 +203,7 @@ no package manager — plain HTML + CSS + a single `<canvas>` game loop in vanil
 | `index.html` | All DOM: menu, weapons/controls/change-log modals, loading screen, HUD, boss intro, victory/defeat screens. Loads the CSS and `main.js` with versioned query strings (bump changed assets to bust cache). |
 | `main.js` | The entire game: state, render loop, physics, collisions, input, music/SFX synthesis, UI wiring. |
 | `style.css` | Retro arcade-cabinet theme: CRT scanline overlay, pixel type, hard-edged chunky controls. Uses Bangers (title) and Press Start 2P (everything else) from Google Fonts. |
-| `favicon.svg` | Inline red "P" mark. |
+| `favicon.svg` | Tab icon: the player ship (same silhouette as `drawPlayer`) in cyan over a dark arcade plate with a red bezel, engine flame and starfield. `apple-touch-icon.png` is a 180px raster of the same art for iOS home screens. |
 | `server.ps1` | PowerShell static file server on `http://localhost:8000`. `$root` is hardcoded to a Windows path and must be edited per machine. |
 
 ## Running it
@@ -106,7 +299,8 @@ goes stale and silently swallows the next real write.
 ## Game flow
 
 0. Title card — "DANIEL AND PETROS PRESENT..." holds for `CREDITS_HOLD_MS` (2.6s), or a
-   click skips it, then `finishCredits()` reveals the menu.
+   click skips it, then `finishCredits()` reveals the menu. The `intro` music track plays
+   under the title card once audio is unlocked, then crossfades into `menu` (see Music).
 1. Menu → pick ship color, weapon, super → `START`.
 2. `showLoading(startGame)` plays a fake progress bar, then `startGame()` resets all state.
 3. Waves 1–4: `createEnemies()` builds the wave from `waveRoster(wave)`. Clearing every
@@ -455,14 +649,19 @@ centred; the old 58%/68% button positions centred only the message and let the g
 
 `music` is a self-contained step sequencer (`main.js`). A 25ms timer schedules notes
 `SCHEDULE_AHEAD` seconds in advance of the AudioContext clock — plain `setInterval` jitters
-audibly. Four tracks (`menu`, `battle`, `boss`, `victory`) are 16-step patterns per bar in MIDI
-numbers, played through synthesised voices: filtered saw/square bass with a sub, plucked arp,
-doubled lead, and noise-based kick/snare/hat. `victory` loops through reward and victory menus.
+audibly. Five tracks (`intro`, `menu`, `battle`, `boss`, `victory`) are 16-step patterns per
+bar in MIDI numbers, played through synthesised voices: filtered saw/square bass with a sub,
+plucked arp, doubled lead, and noise-based kick/snare/hat. `intro` is a short, drum-less
+fanfare for the title card; `victory` is `once: true` and stops itself.
 
 Everything routes through `musicGain` / `sfxGain` and then `masterGain` off one
-`ensureAudio()` context. Browsers
-block audio before a gesture, so `unlockAudio()` waits for the first click or keypress and then
-brings the menu track in.
+`ensureAudio()` context. Browsers block audio before a gesture, so `unlockAudio()` waits for
+the first click or keypress and then brings in `intro` (or `menu` directly, if the title card
+is already gone). `music.play(name, fadeSeconds)` takes an optional crossfade length — used
+by `finishCredits()` to hand off from `intro` to `menu` with a slower 1.4s fade instead of the
+usual snappy 0.6s track switch — but only once `intro` is confirmed already playing, since
+calling `play()` against a still-suspended (pre-gesture) AudioContext would schedule notes
+against a frozen clock and burst them out once the context finally resumes.
 
 ## Loadout UI
 
@@ -519,3 +718,4 @@ full previews inherit both loadout color tokens so gradient icons remain visible
   from `WEAPON_COLORS`; supers, their ready outline and super HUD read from `SUPER_COLORS`; only
   the ship and shared menu chrome read from `playerColor` / the CSS `--theme` tokens.
 - After editing `main.js`, bump the `?v=` in `index.html`'s script tag.
+- There is no change log to update — see "There is no change log" at the top.

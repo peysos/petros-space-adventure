@@ -244,28 +244,6 @@ let bossBlink = 0;
 let bossBlinkTimer = 200;
 let bossDrift = 0;
 let bossBurstTimer = 480;
-// Which planet is in the arena. Everything shared between the two fights —
-// health bar, debris, death sequence, bomb and beam damage — reads this rather
-// than assuming Mercury.
-let bossKind = "mercury";
-// Both fights run three phases, stepped at 2/3 and 1/3 health. The phase drives
-// every timer in the fight, so "harder" is one number rather than a dozen
-// scattered constants.
-let bossPhase = 1;
-let bossPhaseFlash = 0;
-let bossMinions = [];
-let bossMinionTimer = 0;
-let venusSpin = 0;
-let venusVortexSpin = 0;
-let venusAttack = "rest";
-let venusAttackTimer = 0;
-let venusStep = 0;
-let venusRotation = 0;
-let venusQueue = [];
-let venusBolts = [];
-let venusDive = null;
-let venusBandPhase = 0;
-let venusCells = [];
 let score = 0;
 let lives = 3;
 let wave = 1;
@@ -359,6 +337,8 @@ const dom = {
   chargeMeter: document.getElementById("charge-meter"),
   chargeFill: document.getElementById("charge-fill"),
   bossFill: document.getElementById("boss-fill"),
+  bossHealth: document.getElementById("boss-health"),
+  bossLabel: document.getElementById("boss-label"),
   testDamage: document.getElementById("test-damage"),
   damageFlash: document.getElementById("damage-flash"),
   menu: document.getElementById("menu-wrap"),
@@ -3176,192 +3156,7 @@ function resetBossAnimation() {
   bossBlink = 0;
   bossBlinkTimer = 200;
   bossDrift = 0;
-  bossBurstTimer = Math.round(rand(450, 600));
-  venusSpin = 0;
-  venusVortexSpin = 0;
-  venusAttack = "rest";
-  venusAttackTimer = 150;
-  venusStep = 0;
-  venusRotation = 0;
-  venusQueue = [];
-  venusBolts = [];
-  venusDive = null;
-  venusLastAttack = "";
-  venusChain = 0;
-  venusTelegraph = "";
-  venusTelegraphAt = 0;
-  venusBandPhase = 0;
-  venusCells = [];
-  bossPhase = 1;
-  bossPhaseFlash = 0;
-  bossMinions = [];
-  bossMinionTimer = 260;
-  clearSuperEntities();
-}
-
-// ---------------------------------------------------------------------------
-// Boss phases and Mercury's brood
-//
-// A single-phase boss is a damage race: once you have read its three patterns
-// there is nothing left to learn, which is what made both fights fall over. Each
-// third of the health bar now speeds every timer up and adds something new, and
-// Mercury's addition is the one thing a planet can plausibly throw — pieces of
-// itself. `bossMinions` are chips of rock that home in and have to be shot down
-// or dodged, so late in the fight the arena is never empty.
-// ---------------------------------------------------------------------------
-const PHASE_RATE = [1, 0.76, 0.56];        // timer multiplier per phase
-const MINION_CAP = 7;
-
-function phaseFor(health, max) {
-  const ratio = Math.max(0, health) / max;
-  return ratio > 0.66 ? 1 : ratio > 0.33 ? 2 : 3;
-}
-
-function phaseRate() { return PHASE_RATE[bossPhase - 1]; }
-
-// Called every frame of either fight; returns true on the frame it steps up.
-function updateBossPhase() {
-  if (bossPhaseFlash > 0) bossPhaseFlash--;
-  const next = phaseFor(boss.health, bossMaxHealth());
-  if (next <= bossPhase) return false;
-  bossPhase = next;
-  bossPhaseFlash = 42;
-  bossShakeTimer = Math.max(bossShakeTimer, 26);
-  screenShakeFrames = Math.max(screenShakeFrames, 16);
-  screenShakeStrength = Math.max(screenShakeStrength, 7);
-  bossExplosions.push({ x: boss.x, y: boss.y, r: 0, max: bossRadius() * 3.4, life: 34, maxLife: 34 });
-  spawnBossShards(4);
-  spawnBossParticles(40, {
-    x: boss.x, y: boss.y, minSpeed: 1.5, maxSpeed: 7, minSize: 2, maxSize: 6, life: 44,
-    colors: bossKind === "venus"
-      ? ["#fff2c8", "#ffab4a", "#c96b23", "#7a3f18"]
-      : ["#ffffff", "#ffdc5a", "#c9c9c9", "#6f6f6f"],
-    gravity: 0.04, drag: 0.98,
-  });
-  bossHitFlash = BOSS_HIT_FRAMES;   // Mercury has no phase art of its own; the damage flash carries it
-  playSound(58, 0.9, "sawtooth");
-  playSound(190, 0.3, "square");
-  showWaveBanner(bossLabel(), bossPhase === 3 ? "FINAL PHASE" : `PHASE ${bossPhase}`);
-  if (bossKind === "mercury") {
-    // the shell cracking is what throws the first brood out
-    for (let i = 0; i < bossPhase; i++) spawnBossMinion(rand(0, Math.PI * 2));
-    bossMinionTimer = 90;
-  }
-  return true;
-}
-
-function spawnBossMinion(angle) {
-  if (bossMinions.length >= MINION_CAP) return;
-  const dist = BOSS_RADIUS * 0.9;
-  bossMinions.push({
-    x: boss.x + Math.cos(angle) * dist,
-    y: boss.y + Math.sin(angle) * dist,
-    vx: Math.cos(angle) * 3.2,
-    vy: Math.sin(angle) * 3.2,
-    health: 2,
-    hitFlash: 0,
-    spin: rand(0, Math.PI * 2),
-    spinSpeed: rand(-0.06, 0.06),
-    wobble: rand(0, Math.PI * 2),
-    life: 1100,
-  });
-  spawnBossParticles(8, {
-    x: boss.x + Math.cos(angle) * dist, y: boss.y + Math.sin(angle) * dist,
-    angle, spread: 0.7, minSpeed: 1, maxSpeed: 4, minSize: 2, maxSize: 4, life: 22,
-    colors: ["#e8e8e8", "#9a9a9a", "#ffdc5a"],
-  });
-  playSound(300, 0.1, "square");
-}
-
-// Chips of Mercury: slow but relentless, and they never stop turning. Two hits
-// each, so a stray shot chips one rather than clearing it, and they are worth
-// super meter — clearing the brood is a real choice against hitting the planet.
-function updateBossMinions() {
-  // steering tightens with the phase, but the speed cap stays low enough that
-  // outrunning one is always possible; the pressure is that there are several
-  const turn = bossPhase >= 3 ? 0.055 : 0.038;
-  const speed = bossPhase >= 3 ? 3.4 : 2.9;
-  for (const m of bossMinions) {
-    m.life--;
-    if (m.hitFlash > 0) m.hitFlash--;
-    m.wobble += 0.09;
-    m.spin += m.spinSpeed;
-    const targetAngle = Math.atan2(aimTargetY() - m.y, aimTargetX() - m.x);
-    const currentAngle = Math.atan2(m.vy, m.vx);
-    let diff = targetAngle - currentAngle;
-    diff = Math.atan2(Math.sin(diff), Math.cos(diff));
-    const next = currentAngle + Math.max(-turn, Math.min(turn, diff));
-    m.vx = Math.cos(next) * speed;
-    m.vy = Math.sin(next) * speed;
-    m.x += m.vx;
-    m.y += m.vy;
-    m.x = Math.max(16, Math.min(W - 16, m.x));
-    m.y = Math.max(24, Math.min(H - 20, m.y));
-
-    ctx.save();
-    ctx.translate(m.x, m.y);
-    ctx.rotate(m.spin);
-    const r = 13 + Math.sin(m.wobble) * 0.8;
-    if (m.hitFlash > 0) drawGlow("#ffffff", 26, 0, 0);
-    ctx.fillStyle = m.hitFlash > 0 ? "#ffffff" : m.health > 1 ? "#8f8b84" : "#6b6862";
-    ctx.beginPath();
-    ctx.moveTo(0, -r);
-    ctx.lineTo(r * 0.85, -r * 0.4);
-    ctx.lineTo(r * 0.7, r * 0.7);
-    ctx.lineTo(-r * 0.2, r);
-    ctx.lineTo(-r * 0.9, r * 0.3);
-    ctx.lineTo(-r * 0.75, -r * 0.55);
-    ctx.closePath();
-    ctx.fill();
-    ctx.fillStyle = "rgba(255, 248, 226, 0.2)";
-    ctx.beginPath(); ctx.arc(-r * 0.3, -r * 0.35, r * 0.22, 0, Math.PI * 2); ctx.fill();
-    ctx.restore();
-    // eyes stay upright and track the ship, so the chip reads as alive
-    const look = Math.max(-1, Math.min(1, (player.x - m.x) / 90));
-    const lookY = Math.max(-1, Math.min(1, (player.y - m.y) / 90));
-    ctx.fillStyle = m.hitFlash > 0 ? "#ff4747" : "#241f1a";
-    ctx.fillRect(m.x - 6, m.y - 3, 4, 4);
-    ctx.fillRect(m.x + 2, m.y - 3, 4, 4);
-    ctx.fillStyle = "#ffdc5a";
-    ctx.fillRect(m.x - 5.5 + look, m.y - 2.5 + lookY, 2, 2);
-    ctx.fillRect(m.x + 2.5 + look, m.y - 2.5 + lookY, 2, 2);
-
-    const hitWidth = player.shrunk ? 12 : 20;
-    const hitHeight = player.shrunk ? 13 : 22;
-    if (!adminInvincible && playerInvulnerable === 0 && Math.abs(m.x - player.x) < hitWidth && Math.abs(m.y - player.y) < hitHeight) {
-      hurtPlayer();
-      m.health = 0;
-      if (!gameActive) return;
-    }
-    for (const bullet of bullets) {
-      if (bullet.y < -50) continue;
-      if (Math.abs(bullet.x - m.x) < 16 && Math.abs(bullet.y - m.y) < 16) {
-        m.health -= bullet.damage || 1;
-        m.hitFlash = 6;
-        superDamage += bullet.damage || 1;
-        updateSuperMeter();
-        if (bullet.type === "tech0") startTechChainBoss(m.x, m.y, m);
-        if (bullet.pierceRemaining !== Infinity) {
-          bullet.pierceRemaining--;
-          if (bullet.pierceRemaining <= 0) bullet.y = -100;
-        }
-        break;
-      }
-    }
-    if (superBeam && superBeam.life % BEAM_TICK === 0 && beamDistance(m.x, m.y) < BEAM_HALF_WIDTH + 13) {
-      m.health -= 1;
-      m.hitFlash = 6;
-    }
-    if (m.health <= 0) {
-      score += 90;
-      spawnBossParticles(12, {
-        x: m.x, y: m.y, minSpeed: 1, maxSpeed: 4.5, minSize: 2, maxSize: 4, life: 26,
-        colors: ["#e8e8e8", "#b0b0b0", "#ffdc5a", "#6f6f6f"], gravity: 0.06,
-      });
-      playSound(210, 0.09, "square");
-    }
-  }
-  compact(bossMinions, (m) => m.health > 0 && m.life > 0);
+  bossBurstTimer = 480;
 }
 
 // Rock knocked loose by damage, kept in orbit around the planet. Each shard has
@@ -3417,14 +3212,6 @@ function startBossFight() {
 
 const BOSS_MAX_HEALTH = 110;
 const BOSS_RADIUS = 78;
-// Venus is the second boss: bigger, tougher, and with attacks that cover the
-// arena instead of aiming a line at the ship.
-const VENUS_MAX_HEALTH = 210;
-const VENUS_RADIUS = 96;
-
-function bossRadius() { return bossKind === "venus" ? VENUS_RADIUS : BOSS_RADIUS; }
-function bossMaxHealth() { return bossKind === "venus" ? VENUS_MAX_HEALTH : BOSS_MAX_HEALTH; }
-function bossLabel() { return bossKind === "venus" ? "VENUS" : "MERCURY"; }
 const BOSS_HIT_FRAMES = 12;
 const BOSS_SHOOT_FRAMES = 20;
 const BOSS_CHARGE_FRAMES = 26;
@@ -3525,6 +3312,10 @@ function damageBoss(amount, fromX, fromY) {
     bossDamageStage = stage;
     spawnBossShards(3);
     bossShakeTimer = Math.max(bossShakeTimer, 12);
+    // the killing blow can jump stage straight to 4 as health clamps to 0 — skip
+    // the phase announcement then, the death sequence is about to take over anyway
+    if (boss.health > 0) announceBossPhase(Math.min(stage, BOSS_ATTACK_PHASES.length - 1));
+    bossAttackPhase = Math.max(bossAttackPhase, Math.min(stage, BOSS_ATTACK_PHASES.length - 1));
   }
   bossHitFlash = BOSS_HIT_FRAMES;
   bossShakeTimer = Math.max(bossShakeTimer, 6);
@@ -3545,6 +3336,53 @@ function damageBoss(amount, fromX, fromY) {
     gravity: 0.06,
   });
   playSound(140 + Math.random() * 60, 0.06, "square");
+}
+
+// A phase boundary is its own event, distinct from the constant per-hit flash: a
+// hard flash on the bar itself, a label/color change that sticks, and the same
+// banner language the wave-clear flow already taught the player to look for.
+function announceBossPhase(stage) {
+  const phase = BOSS_ATTACK_PHASES[Math.min(stage, BOSS_ATTACK_PHASES.length - 1)];
+  dom.bossHealth.dataset.stage = String(stage);
+  dom.bossHealth.classList.remove("phase-flash");
+  void dom.bossHealth.offsetWidth;
+  dom.bossHealth.classList.add("phase-flash");
+  setText(dom.bossLabel, phase.label ? `MERCURY — ${phase.label}` : "MERCURY");
+  showWaveBanner("MERCURY", `PHASE ${stage + 1}${phase.label ? " — " + phase.label : ""}`);
+  playSound(180 + stage * 40, 0.24, "square");
+  playSound(90 + stage * 15, 0.32, "sawtooth");
+}
+
+// Fires one 8-way ring of the radial burst, optionally rotated to interleave with
+// a previous ring — closing the walk-out-radially gap once phase 2 doubles it up.
+function fireBossBurstRing(rotationOffset) {
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2 + rotationOffset + rand(-0.05, 0.05);
+    bossBullets.push({ x: boss.x, y: boss.y, vx: Math.cos(a) * 2.4, vy: Math.sin(a) * 2.4 });
+  }
+}
+
+// Phase 2+: the molten fissures already visible on the body fire on their own,
+// so the new threat reads as "the wounds are attacking you" rather than an
+// arbitrary new bullet type. Reuses the same crack paths the renderer draws.
+function fireCrackEmbers() {
+  const damage = 1 - Math.max(0, boss.health) / BOSS_MAX_HEALTH;
+  const shown = Math.max(1, Math.min(Math.floor(damage * BOSS_CRACKS.length), BOSS_CRACKS.length));
+  const picks = Math.min(3, shown);
+  for (let i = 0; i < picks; i++) {
+    const crack = BOSS_CRACKS[Math.floor(Math.random() * shown)];
+    const tip = crack[crack.length - 1];
+    const angle = Math.atan2(tip[1], tip[0]);
+    const originX = boss.x + Math.cos(angle) * BOSS_RADIUS * 0.95;
+    const originY = boss.y + Math.sin(angle) * BOSS_RADIUS * 0.95;
+    bossBullets.push({ x: originX, y: originY, vx: Math.cos(angle) * 3.1, vy: Math.sin(angle) * 3.1 });
+    spawnBossParticles(6, {
+      x: originX, y: originY, angle, spread: 0.3, minSpeed: 0.6, maxSpeed: 2.4,
+      minSize: 1, maxSize: 3, life: 20, colors: ["#ffdc5a", "#ff8a32", "#fff3c4"],
+    });
+  }
+  bossShakeTimer = Math.max(bossShakeTimer, 4);
+  playSound(200, 0.1, "square");
 }
 
 function startBossDeath() {
@@ -4696,27 +4534,14 @@ function drawBossArea(t) {
     spawnSparks(boss.x, boss.y, 8, superBeam.color || superColor("lance"), { life: 20 });
   }
 
-  if (!bossDying && venus) {
-    updateVenusBoss(t);
-  }
-
-  if (!bossDying && !venus) {
-    const rate = phaseRate();
+  if (!bossDying) {
     // Mercury sweeps the arena and leans toward the player. A stationary boss is
-    // what made "stand here and never get hit" possible in the first place, and
-    // it sweeps harder each phase.
-    bossDrift += 0.0048 / rate;
-    const range = Math.min(220 + bossPhase * 30, W * 0.24);
-    const target = W / 2 + Math.sin(bossDrift) * range + (player.x - W / 2) * (0.28 + bossPhase * 0.05);
-    boss.x += (target - boss.x) * 0.022;
+    // what made "stand here and never get hit" possible in the first place.
+    bossDrift += 0.0052;
+    const range = Math.min(250, W * 0.22);
+    const target = W / 2 + Math.sin(bossDrift) * range + (player.x - W / 2) * 0.12;
+    boss.x += (target - boss.x) * 0.016;
     boss.x = Math.max(120, Math.min(W - 120, boss.x));
-
-    // From phase 2 it keeps throwing chips of itself at the ship.
-    if (bossPhase >= 2 && --bossMinionTimer <= 0) {
-      const batch = bossPhase >= 3 ? 3 : 2;
-      for (let i = 0; i < batch; i++) spawnBossMinion(rand(0, Math.PI * 2));
-      bossMinionTimer = Math.round((bossPhase >= 3 ? 250 : 360) + rand(-40, 60));
-    }
 
     // molten embers rise off the cracks once it is properly hurt
     if (bossDamageStage >= 2 && Math.random() < 0.4) {
@@ -4726,25 +4551,33 @@ function drawBossArea(t) {
         { minSpeed: 0.2, maxSpeed: 0.9, life: 40, drag: 0.98, gravity: -0.02 });
     }
 
+    // phase 2+: the fissures fire on their own, on top of everything else
+    if (phase.crackFire) {
+      bossCrackFireTimer--;
+      if (bossCrackFireTimer <= 0) {
+        fireCrackEmbers();
+        bossCrackFireTimer = 100;
+      }
+    }
+
     // radial burst: rare, slow, easy to walk out of — but it sweeps the arena,
-    // so there is no corner that is safe forever
+    // so there is no corner that is safe forever. Phase 2+ fires a second ring
+    // rotated into the gaps of the first, closing the walk-straight-out escape.
     bossBurstTimer--;
     if (bossBurstTimer === 40) {
       bossChargeAnim = BOSS_CHARGE_FRAMES;
       playSound(60, 0.4, "triangle");
     }
     if (bossBurstTimer <= 0) {
-      const count = Math.round(rand(7, 11));
-      const phase = rand(0, Math.PI * 2);
-      for (let i = 0; i < count; i++) {
-        const a = phase + (i / count) * Math.PI * 2 + rand(-0.045, 0.045);
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * Math.PI * 2 + rand(-0.05, 0.05);
         bossBullets.push({ x: boss.x, y: boss.y, vx: Math.cos(a) * 2.4, vy: Math.sin(a) * 2.4 });
       }
       bossShootAnim = BOSS_SHOOT_FRAMES;
       bossShakeTimer = Math.max(bossShakeTimer, 10);
       bossExplosions.push({ x: boss.x, y: boss.y, r: 0, max: 150, life: 20, maxLife: 20 });
       playSound(140, 0.35, "sawtooth");
-      bossBurstTimer = Math.round(rand(450, 650) * phaseRate());
+      bossBurstTimer = 540;
     }
 
     bossShotTimer--;
@@ -4754,30 +4587,15 @@ function drawBossArea(t) {
     }
     if (bossChargeAnim > 0) bossChargeAnim--;
     if (bossShotTimer <= 0) {
-      const angle = trackedBossAngle(boss.x, boss.y + 70, 18);
-      const pattern = Math.random();
-      const offsets = pattern < 0.56 ? [0] : pattern < 0.82 ? [-0.14, 0.14] : [-0.16, 0, 0.16];
-      const speed = (pattern < 0.82 ? 3.6 : 4.15) + (bossPhase - 1) * 0.35;
-      for (const offset of offsets) {
-        const shotAngle = angle + offset;
-        enemyBullets.push({
-          x: boss.x,
-          y: boss.y + 70,
-          vx: Math.cos(shotAngle) * speed,
-          vy: Math.sin(shotAngle) * speed,
-          speed,
-          turnRate: (pattern < 0.56 ? 0.026 : pattern < 0.82 ? 0.018 : 0) * (bossPhase >= 3 ? 1.35 : 1),
-          homing: (pattern < 0.56 ? 105 : pattern < 0.82 ? 60 : 0) * (bossPhase >= 3 ? 1.4 : 1),
-          kind: "meteor",
-        });
-      }
+      const angle = Math.atan2(player.y - boss.y, player.x - boss.x);
+      enemyBullets.push({ x: boss.x, y: boss.y + 70, vx: Math.cos(angle) * 3.7, vy: Math.sin(angle) * 3.7, speed: 3.7, turnRate: 0.022, homing: 90, kind: "meteor" });
       bossShootAnim = BOSS_SHOOT_FRAMES;
       bossChargeAnim = 0;
       spawnBossParticles(10, {
-        x: boss.x, y: boss.y + 34, angle, spread: 0.5, minSpeed: 1, maxSpeed: 3.6,
+        x: boss.x, y: boss.y + 34, angle: baseAngle, spread: 0.5, minSpeed: 1, maxSpeed: 3.6,
         minSize: 2, maxSize: 4, life: 20, colors: ["#ffdc5a", "#ff8a32", "#fff3c4"],
       });
-      bossShotTimer = Math.round(rand(48, 94) * phaseRate());
+      bossShotTimer = 36;
     }
   }
 
@@ -4893,7 +4711,7 @@ function drawBossArea(t) {
         minSize: 2, maxSize: 5, life: 26, colors: ["#ffdc5a", "#ff8a32", "#fff3c4"],
       });
       playSound(220, 0.15, "sawtooth");
-      bossAttackTimer = Math.round(rand(175, 290) * phaseRate());
+      bossAttackTimer = 220;
     }
   }
 
@@ -5727,6 +5545,16 @@ const music = (function () {
   // Patterns are 16 steps to the bar, in MIDI note numbers; 0 is a rest and a
   // bar list cycles, so a four-bar loop costs four short arrays.
   const TRACKS = {
+    // A short, drum-less fanfare for the title card — loops if the player
+    // lingers there, then crossfades into `menu` once finishCredits() runs.
+    intro: {
+      bpm: 100,
+      volume: 0.15,
+      bass: [[36, 0, 0, 0, 41, 0, 0, 0, 43, 0, 0, 0, 41, 0, 0, 0]],
+      arp:  [[60, 64, 67, 72, 76, 72, 67, 64, 60, 64, 67, 72, 76, 79, 76, 72]],
+      lead: [[0, 0, 0, 0, 0, 0, 0, 0, 79, 0, 0, 0, 84, 0, 0, 0]],
+      kick: [], snare: [], hat: [],
+    },
     menu: {
       bpm: 92,
       volume: 0.16,
@@ -5964,7 +5792,7 @@ const music = (function () {
     return track.volume * audioSettings.music * (ducked ? 0.28 : 1);
   }
 
-  function play(name) {
+  function play(name, fadeSeconds = 0.6) {
     if (!ensureAudio()) return;
     if (audioContext.state === "suspended") audioContext.resume();
     if (trackName === name && timer) return;
@@ -5974,7 +5802,7 @@ const music = (function () {
     if (!track) { stop(); return; }
     step = 0;
     nextStepTime = audioContext.currentTime + 0.06;
-    fade(targetVolume(), 0.6);
+    fade(targetVolume(), fadeSeconds);
     timer = setInterval(tick, LOOKAHEAD_MS);
     tick();
   }
@@ -6315,21 +6143,34 @@ function finishCredits() {
   credits.classList.add("fading");
   document.getElementById("menu-wrap").classList.remove("hidden");
   setTimeout(() => credits.classList.add("gone"), 750);
+  // If the welcome theme is already sounding, hand off to the menu track with
+  // a slow crossfade rather than the usual snappy track switch. If audio
+  // hasn't been unlocked yet, leave it alone — unlockAudio() below checks
+  // creditsDone and will start straight into "menu" on the player's first
+  // gesture instead of starting a track against a still-suspended context.
+  if (audioContext && music.current() === "intro") music.play("menu", 1.4);
 }
 setTimeout(finishCredits, CREDITS_HOLD_MS);
 // a click or key skips the wait
 document.getElementById("credits-screen").addEventListener("click", finishCredits);
 
-// Browsers won't let audio start before a gesture, so the menu track waits for
-// the player's first click or keypress and then comes in.
+// Browsers won't let audio start before a gesture, so the welcome/menu track
+// waits for the player's first click or keypress and then comes in — the
+// welcome theme while the title card is up, the menu track once it's gone.
+// Deliberately mousedown/touchstart/keydown, not pointerdown: Safari's
+// autoplay-gesture detection only recognises the legacy input events and
+// silently ignores Pointer Events, so a pointerdown-only listener would run
+// this function on Safari without ever actually unsuspending the context.
 function unlockAudio() {
   ensureAudio();
   if (audioContext && audioContext.state === "suspended") audioContext.resume();
-  if (!gameActive) music.play("menu");
-  window.removeEventListener("pointerdown", unlockAudio);
+  if (!gameActive) music.play(creditsDone ? "menu" : "intro");
+  window.removeEventListener("mousedown", unlockAudio);
+  window.removeEventListener("touchstart", unlockAudio);
   window.removeEventListener("keydown", unlockAudio);
 }
-window.addEventListener("pointerdown", unlockAudio);
+window.addEventListener("mousedown", unlockAudio);
+window.addEventListener("touchstart", unlockAudio, { passive: true });
 window.addEventListener("keydown", unlockAudio);
 
 document.getElementById("start-btn").addEventListener("click", function () {
