@@ -1,3 +1,10 @@
+// The dev server sends no cache headers, so a browser will happily keep an old
+// `index.html` — and with it an old `?v=` — through an ordinary reload. Bumping
+// the query string busts main.js but nothing busts the page that points at it.
+// Stamping the build here makes "am I actually looking at my change?" a glance
+// at the console instead of an afternoon.
+console.log("Petros Space Adventure —", (document.currentScript && document.currentScript.src || "").split("/").pop() || "main.js");
+
 const canvas = document.getElementById("space-bg");
 // alpha:false lets the compositor skip blending the canvas against the page.
 const ctx = canvas.getContext("2d", { alpha: false, desynchronized: true });
@@ -193,18 +200,42 @@ let staticStars = [];
 let gameActive = false;
 let gamePaused = false;
 let gameOverShown = false;
-let adminInvincible = false;
-let testMode = false;
-let testDamage = 0;
+// Which sky the run ended under, so the game-over screen can hold it. Set in
+// endGame() before the boss flags are cleared, read only while gameOverShown.
+let deathScene = "space";
+// Set while a reward or victory card is up, so the paused canvas behind it keeps
+// painting that chapter's sky instead of going black.
+let celebrationScene = null;
+// True while a boss's defeat card is up, so the canvas paints the real planet.
+let defeatPortrait = false;
+let retryBoss = null;
+let retryWave = 1;
+// Set only by the BUILDER console's `god` command. Every damage check in the
+// file is guarded by it, so it stays a single flag rather than a set of them.
+let devGodMode = false;
 let bossMode = false;
 let bossIntro = false;
 let playerName = "PLAYER";
 let playerColor = "#7ef9ff";
 const GREY_SHIP_COLOR = "#b9b9c0";
+// Same hex as the MAGMA weapon's projectiles, so beating Venus and equipping
+// both reads as one matching molten loadout rather than two unrelated drops.
+const MAGMA_SHIP_COLOR = "#ff5040";
 // What to fall back to when a reward is un-equipped from the reward screen.
 let rewardPreviousWeapon = "blaster";
 let rewardPreviousColor = "#7ef9ff";
-const WEAPON_COLORS = { blaster: "#ffdc5a", charge: "#ff8a32", cone: "#63ff91", tech0: "#63f7ff" };
+const WEAPON_COLORS = { blaster: "#ffdc5a", charge: "#ff8a32", cone: "#63ff91", tech0: "#63f7ff", magma: "#ff5040" };
+// Magma tuning: a heavy molten slug that splashes. Slow in the air and no
+// tracking, so it loses to the blaster on a lone dodging target — it wins on a
+// formation, because every impact sprays droplets over the neighbours.
+const MAGMA_CYCLE = 30;
+const MAGMA_SHRUNK_CYCLE = 90;
+const MAGMA_SPEED = 0.7;        // fraction of the standard 10px/frame round
+const MAGMA_DAMAGE = 3;
+const MAGMA_DROPS = 5;
+const MAGMA_DROP_LIFE = 30;
+const MAGMA_DROP_SPEED = 5;
+const MAGMA_DROP_CAP = 24;      // droplets may overflow the normal bullet cap
 // Tech.0 tuning in one place so waves, bosses and the test room agree. It is
 // the crowd weapon: modest single-target damage, but the arc pays out against
 // packed formations and Mercury's brood.
@@ -221,6 +252,60 @@ const SUPER_COLORS = {
 };
 let selectedWeapon = "blaster";
 let selectedSuper = "bomb";
+// Everything below TECHNOLOGY is a boss reward. Which boss hands over which
+// super is still undecided, so the value here is the chapter that grants it and
+// `null` means "not assigned yet" — the lock panel says so rather than sending
+// the player off to beat a fight that cannot award it. Fill a name in when a
+// chapter claims one; nothing else has to change.
+const LOCKED_SUPERS = {
+  star: null, mirror: null, drone: null, decoy: null, firstaid: null, orb: null,
+};
+const SUPER_UNLOCK_KEY = "petros-space-adventure-supers";
+let unlockedSupers = loadUnlockedSupers();
+
+function loadUnlockedSupers() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(SUPER_UNLOCK_KEY));
+    return new Set(Array.isArray(saved) ? saved.filter((n) => n in LOCKED_SUPERS) : []);
+  } catch (error) {
+    return new Set();
+  }
+}
+
+function persistUnlockedSupers() {
+  try {
+    localStorage.setItem(SUPER_UNLOCK_KEY, JSON.stringify(Array.from(unlockedSupers)));
+  } catch (error) {
+    // Private mode: the unlock still stands for this session.
+  }
+}
+
+function superLocked(name) {
+  return name in LOCKED_SUPERS && !unlockedSupers.has(name);
+}
+
+function unlockSuper(name) {
+  if (!(name in LOCKED_SUPERS) || unlockedSupers.has(name)) return false;
+  unlockedSupers.add(name);
+  persistUnlockedSupers();
+  syncSuperLockUI();
+  return true;
+}
+
+function syncSuperLockUI() {
+  document.querySelectorAll("[data-super-locked]").forEach((item) => {
+    const locked = superLocked(item.dataset.super);
+    item.classList.toggle("locked", locked);
+    item.setAttribute("aria-disabled", String(locked));
+  });
+  // A super that was equipped before it was locked (or before this table
+  // existed) would otherwise stay equipped and firing.
+  if (superLocked(selectedSuper)) {
+    selectedSuper = "bomb";
+    refreshLoadoutUI();
+    updateSuperMeter();
+  }
+}
 let chargeStartedAt = 0;
 let chargeDirection = { x: 0, y: -1 };
 let lastArrowDirection = { x: 0, y: -1 };
@@ -247,13 +332,27 @@ let bossBurstTimer = 480;
 // Which planet is in the arena. Everything shared between the two fights —
 // health bar, debris, death sequence, bomb and beam damage — reads this rather
 // than assuming Mercury.
-let bossKind = "mercury";
+let bossKind = "moon";
 // Both fights run three phases, stepped at 2/3 and 1/3 health. The phase drives
 // every timer in the fight, so "harder" is one number rather than a dozen
 // scattered constants.
 let bossPhase = 1;
 let bossPhaseFlash = 0;
 let bossMinions = [];
+
+// --- THE MOON's own fight state -------------------------------------------
+// Impacts are the spine of the fight, so they are a list rather than a timer:
+// each entry is a strike that has been *called* and is still falling, which is
+// what lets the arena be read a second and a half before it is dangerous.
+let moonImpacts = [];
+let moonImpactTimer = 150;
+let moonPull = 0;          // frames of tidal pull left
+let moonPullTimer = 620;
+let moonEclipse = 0;       // frames of eclipse left
+let moonEclipseTimer = 0;
+let moonLit = 0.26;        // lit fraction, eased toward the phase target
+let moonLibration = 0;
+let moonSpiral = 0;        // eclipse spiral arm angle
 let bossMinionTimer = 0;
 let venusSpin = 0;
 let venusVortexSpin = 0;
@@ -292,6 +391,13 @@ let bombBlasts = [];
 let superBeam = null;
 let techChains = [];
 let sparks = [];
+// Which wingtip the blaster fires from next, flipped on every shot.
+let blasterBarrel = 1;
+const BLASTER_BARREL_OFFSET = 7;
+// Muzzle flashes are declared with the other pools so `resize()` (which rescales
+// every live pool) can reach them at load time.
+const muzzleFlashes = [];
+const MAX_MUZZLE_FLASHES = 12;
 let audioContext = null;
 let spaceDownAt = 0;
 let suppressSpaceRelease = false;
@@ -312,13 +418,55 @@ const touchControls = {
 document.documentElement.classList.toggle("touch-capable", touchCapable);
 
 const AUDIO_STORAGE_KEY = "petros-space-adventure-audio";
-const MERCURY_UNLOCK_KEY = "petros-space-adventure-mercury-rewards";
+// Chapter 1's key. It was written when the first boss was Mercury; the old
+// name is still read once so a player who beat it before the Moon existed keeps
+// the Grey Ship and Tech.0 they already earned.
+const MOON_UNLOCK_KEY = "petros-space-adventure-moon-rewards";
+const LEGACY_MERCURY_UNLOCK_KEY = "petros-space-adventure-mercury-rewards";
+const VENUS_UNLOCK_KEY = "petros-space-adventure-venus-rewards";
+// The furthest wave ever *cleared*, which is what the LEVELS picker unlocks
+// from. Reaching a wave is not beating it, so this is only ever written when a
+// wave is actually finished — see `recordWaveCleared()`.
+const PROGRESS_KEY = "petros-space-adventure-progress";
 const audioSettings = loadAudioSettings();
-let mercuryRewardsUnlocked = loadMercuryRewards();
+let moonRewardsUnlocked = loadMoonRewards();
+let venusRewardsUnlocked = loadVenusRewards();
+let clearedWave = loadClearedWave();
 
-function loadMercuryRewards() {
+function loadClearedWave() {
   try {
-    return localStorage.getItem(MERCURY_UNLOCK_KEY) === "unlocked";
+    const saved = Number(localStorage.getItem(PROGRESS_KEY));
+    return Number.isFinite(saved) && saved > 0 ? Math.floor(saved) : 0;
+  } catch (error) {
+    return 0;
+  }
+}
+
+// Called from every path that finishes a wave. Monotonic: dying on wave 8 never
+// costs you the levels you already opened.
+function recordWaveCleared(number) {
+  if (!Number.isFinite(number) || number <= clearedWave) return;
+  clearedWave = Math.floor(number);
+  try {
+    localStorage.setItem(PROGRESS_KEY, String(clearedWave));
+  } catch (error) {
+    // Private mode: the unlock still stands for this session.
+  }
+  if (dom.levelsPanel && dom.levelsPanel.classList.contains("visible")) showLevelPage(levelPageIndex);
+}
+
+function loadVenusRewards() {
+  try {
+    return localStorage.getItem(VENUS_UNLOCK_KEY) === "unlocked";
+  } catch (error) {
+    return false;
+  }
+}
+
+function loadMoonRewards() {
+  try {
+    return localStorage.getItem(MOON_UNLOCK_KEY) === "unlocked"
+      || localStorage.getItem(LEGACY_MERCURY_UNLOCK_KEY) === "unlocked";
   } catch (error) {
     return false;
   }
@@ -359,16 +507,20 @@ const dom = {
   chargeMeter: document.getElementById("charge-meter"),
   chargeFill: document.getElementById("charge-fill"),
   bossFill: document.getElementById("boss-fill"),
-  testDamage: document.getElementById("test-damage"),
+  bossHealth: document.getElementById("boss-health"),
   damageFlash: document.getElementById("damage-flash"),
   menu: document.getElementById("menu-wrap"),
   controlsPanel: document.getElementById("controls-panel"),
-  changelogPanel: document.getElementById("changelog-panel"),
+  alphaPanel: document.getElementById("alpha-panel"),
   weaponsPanel: document.getElementById("weapons-panel"),
-  mercuryLockPanel: document.getElementById("mercury-lock-panel"),
+  thanksScreen: document.getElementById("thanks-screen"),
+  levelsPanel: document.getElementById("levels-panel"),
+  levelBook: document.getElementById("level-book"),
+  levelDots: document.getElementById("level-dots"),
+  moonLockPanel: document.getElementById("moon-lock-panel"),
   bossIntro: document.getElementById("boss-intro"),
   victoryScreen: document.getElementById("victory-screen"),
-  mercuryDefeatScreen: document.getElementById("mercury-defeat-screen"),
+  moonDefeatScreen: document.getElementById("moon-defeat-screen"),
   gameUi: document.getElementById("game-ui"),
   mobileControls: document.getElementById("mobile-controls"),
   mobilePause: document.getElementById("mobile-pause-btn"),
@@ -444,7 +596,7 @@ function reflowGameForViewport(previousW, previousH) {
     if (Number.isFinite(enemy.homeX)) enemy.homeX *= scaleX;
     if (Number.isFinite(enemy.homeY)) enemy.homeY *= scaleY;
   }
-  [bullets, enemyBullets, bossBullets, superBombs, bombBlasts, sparks, bossParticles, bossExplosions]
+  [bullets, enemyBullets, bossBullets, superBombs, bombBlasts, sparks, bossParticles, bossExplosions, muzzleFlashes]
     .forEach((items) => items.forEach(scalePoint));
   scalePoint(boss);
   if (bossMode || bossIntro) boss.y = bossSpawnY();
@@ -518,14 +670,16 @@ function isVisibleControl(element) {
 function activeMenuRoot() {
   const rewards = document.getElementById("reward-screen");
   if (rewards.classList.contains("visible")) return rewards;
-  if (dom.mercuryLockPanel.classList.contains("visible")) return dom.mercuryLockPanel;
+  if (dom.moonLockPanel.classList.contains("visible")) return dom.moonLockPanel;
+  if (dom.levelsPanel.classList.contains("visible")) return dom.levelsPanel;
   if (dom.weaponsPanel.classList.contains("visible")) return dom.weaponsPanel;
-  if (dom.mercuryDefeatScreen.classList.contains("visible")) return dom.mercuryDefeatScreen;
+  if (dom.moonDefeatScreen.classList.contains("visible")) return dom.moonDefeatScreen;
+  if (dom.thanksScreen.classList.contains("visible")) return dom.thanksScreen;
   if (dom.victoryScreen.classList.contains("visible")) return dom.victoryScreen;
   if (dom.bossIntro.classList.contains("visible")) return dom.bossIntro;
   if (dom.weaponsPanel.classList.contains("visible")) return dom.weaponsPanel;
-  if (dom.changelogPanel.classList.contains("visible")) return dom.changelogPanel;
   if (dom.controlsPanel.classList.contains("visible")) return dom.controlsPanel;
+  if (dom.alphaPanel.classList.contains("visible")) return dom.alphaPanel;
   if (dom.pauseScreen.classList.contains("visible")) return dom.pauseScreen;
   if (gameOverShown && dom.gameUi.classList.contains("active")) return dom.gameUi;
   if (!dom.menu.classList.contains("hidden")) return dom.menu;
@@ -554,7 +708,7 @@ function focusMenuDefault(root) {
   if (!root) return;
   const preferred = root === dom.menu
     ? document.getElementById("start-btn")
-    : root.querySelector(".selected, #resume-btn, #try-again-btn, #defeat-retry, #continue-boss, #victory-continue");
+    : root.querySelector(".selected, #resume-btn, #try-again-btn, #defeat-retry, #continue-boss, #victory-continue, #alpha-dismiss");
   const target = preferred && isVisibleControl(preferred) ? preferred : menuFocusables(root)[0];
   if (target) target.focus();
 }
@@ -566,7 +720,21 @@ function closeMenuPanel(panel, trigger) {
 }
 
 let controlsReturnTarget = null;
-let mercuryLockReturnTarget = null;
+let moonLockReturnTarget = null;
+// Two ALPHA marks open the same card -- the chip on the title and the corner
+// stamp -- so remember which one did it and hand focus back there on close.
+let alphaReturnTarget = null;
+
+function openAlphaPanel(trigger) {
+  alphaReturnTarget = trigger;
+  dom.alphaPanel.classList.add("visible");
+  dom.alphaPanel.setAttribute("aria-hidden", "false");
+  focusMenuDefault(dom.alphaPanel);
+  // GOT IT is the default target, and focusing it scrolls a card that had to
+  // become scrollable on a short screen straight past its own heading.
+  const card = dom.alphaPanel.querySelector(".alpha-card");
+  if (card) card.scrollTop = 0;
+}
 
 function openControlsPanel(trigger) {
   controlsReturnTarget = trigger;
@@ -575,11 +743,33 @@ function openControlsPanel(trigger) {
   focusMenuDefault(dom.controlsPanel);
 }
 
-function openMercuryLockPanel(trigger) {
-  mercuryLockReturnTarget = trigger;
-  dom.mercuryLockPanel.classList.add("visible");
-  dom.mercuryLockPanel.setAttribute("aria-hidden", "false");
-  focusMenuDefault(dom.mercuryLockPanel);
+// Three reasons a reward can be locked now, so the message is looked up rather
+// than picked by a boolean: the Moon can actually be beaten, Venus is still
+// being built, and the supers below TECHNOLOGY have no chapter assigned yet.
+// Add the fourth here, not as another ternary.
+function lockReason(trigger) {
+  if (!trigger || !trigger.matches) return "moon";
+  if (trigger.matches("[data-super-locked]")) return "super";
+  if (trigger.matches("[data-venus-locked]")) return "venus";
+  return "moon";
+}
+
+const LOCK_MESSAGES = {
+  moon: { title: "BEAT THE MOON", sub: "Defeat the Moon once to unlock<br />the Grey Ship and Tech.0." },
+  venus: { title: "COMING SOON", sub: "Venus is still being built.<br />The Magma Ship and Magma arrive with it." },
+  super: { title: "COMING SOON", sub: "Every super past TECHNOLOGY is a boss reward.<br />Which boss hands over which one is still being decided." },
+};
+
+function openLockPanel(trigger) {
+  moonLockReturnTarget = trigger;
+  const reason = lockReason(trigger);
+  const message = LOCK_MESSAGES[reason];
+  setText(document.getElementById("lock-title"), message.title);
+  document.getElementById("lock-sub").innerHTML = message.sub;
+  dom.moonLockPanel.querySelector(".unlock-card").classList.toggle("venus", reason !== "moon");
+  dom.moonLockPanel.classList.add("visible");
+  dom.moonLockPanel.setAttribute("aria-hidden", "false");
+  focusMenuDefault(dom.moonLockPanel);
 }
 
 function setAudioDrawer(section, expanded) {
@@ -659,14 +849,19 @@ function handleMenuKeydown(event) {
   }
 
   if (event.code === "Escape") {
-    if (dom.mercuryLockPanel.classList.contains("visible")) {
+    if (dom.moonLockPanel.classList.contains("visible")) {
       event.preventDefault();
-      closeMenuPanel(dom.mercuryLockPanel, mercuryLockReturnTarget);
+      closeMenuPanel(dom.moonLockPanel, moonLockReturnTarget);
+      return true;
+    }
+    if (dom.levelsPanel.classList.contains("visible")) {
+      event.preventDefault();
+      closeMenuPanel(dom.levelsPanel, levelsReturnTarget || document.getElementById("levels-btn"));
       return true;
     }
     if (dom.weaponsPanel.classList.contains("visible")) {
       event.preventDefault();
-      closeMenuPanel(dom.weaponsPanel, dom.victoryScreen.classList.contains("visible") ? document.getElementById("victory-continue") : document.getElementById("weapons-btn"));
+      closeMenuPanel(dom.weaponsPanel, weaponsReturnTarget || document.getElementById("weapons-btn"));
       return true;
     }
     if (dom.controlsPanel.classList.contains("visible")) {
@@ -674,9 +869,9 @@ function handleMenuKeydown(event) {
       closeMenuPanel(dom.controlsPanel, controlsReturnTarget || document.getElementById("controls-btn"));
       return true;
     }
-    if (dom.changelogPanel.classList.contains("visible")) {
+    if (dom.alphaPanel.classList.contains("visible")) {
       event.preventDefault();
-      closeMenuPanel(dom.changelogPanel, document.getElementById("changelog-btn"));
+      closeMenuPanel(dom.alphaPanel, alphaReturnTarget || document.getElementById("alpha-btn"));
       return true;
     }
     const root = activeMenuRoot();
@@ -721,12 +916,6 @@ function handleMenuKeydown(event) {
     return true;
   }
   if (!event.code.startsWith("Arrow")) return false;
-  if (dom.changelogPanel.classList.contains("visible") && (event.code === "ArrowUp" || event.code === "ArrowDown")) {
-    event.preventDefault();
-    const history = dom.changelogPanel.querySelector(".changelog-history");
-    if (history) history.scrollBy({ top: event.code === "ArrowDown" ? 80 : -80, behavior: "smooth" });
-    return true;
-  }
   if (active.matches("input[type='range']") && (event.code === "ArrowLeft" || event.code === "ArrowRight")) return true;
   if (active.matches("input[type='text']") && (event.code === "ArrowLeft" || event.code === "ArrowRight")) return true;
   event.preventDefault();
@@ -798,6 +987,400 @@ function drawStaticStars(t) {
   ctx.globalAlpha = 1;
 }
 
+// Mirrors the arena the run ended in. Venus's sky redraws itself from wave and
+// the boss flags, which endGame() leaves intact; everything in the Mercury
+// chapter is the same star field the menu uses.
+// The pre-fight card, drawn with the real assets: `drawPlayer()` and the boss's
+// own `drawMoon()`/`drawVenus()`, scaled up on the same canvas the fight uses.
+// A CSS mock-up of either one is a different ship and a different planet, and it
+// shows — this is the actual art, at portrait size, with the DOM card supplying
+// only the names and the button.
+//
+// Both are drawn by temporarily moving `player` and `boss` to their portrait
+// marks and putting them back afterwards, so nothing outside this function ever
+// sees the change.
+let bossIntroFrame = 0;
+let versusCardUp = false;
+
+// Draws the boss exactly as the fight draws it, at a portrait mark and size, in
+// its opening state: full health, phase 1, no damage or recoil animation left
+// over from whatever was happening when this screen appeared. Every global it
+// touches is put back, so this is safe to call from a paused frame.
+function drawBossPortrait(x, y, scale, t) {
+  const keep = {
+    x: boss.x, y: boss.y, health: boss.health, phase: bossPhase, lit: moonLit,
+    shake: bossShakeTimer, hit: bossHitFlash, charge: bossChargeAnim, shoot: bossShootAnim,
+    eclipse: moonEclipse,
+  };
+  boss.x = x;
+  boss.y = y;
+  boss.health = bossMaxHealth();
+  bossPhase = 1;
+  moonLit = MOON_PHASE_LIGHT[0];
+  bossShakeTimer = 0;
+  bossHitFlash = 0;
+  bossChargeAnim = 0;
+  bossShootAnim = 0;
+  moonEclipse = 0;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(scale, scale);
+  ctx.translate(-x, -y);
+  if (bossKind === "venus") drawVenus(t); else drawMoon(t);
+  ctx.restore();
+  boss.x = keep.x; boss.y = keep.y; boss.health = keep.health;
+  bossPhase = keep.phase; moonLit = keep.lit; bossShakeTimer = keep.shake;
+  bossHitFlash = keep.hit; bossChargeAnim = keep.charge; bossShootAnim = keep.shoot;
+  moonEclipse = keep.eclipse;
+}
+
+function drawVersusStage(t) {
+  bossIntroFrame++;
+  const midX = W / 2;
+  const y = H * 0.42;
+  const moonScale = Math.max(1.3, Math.min(3, Math.min(W, H) / 400));
+  const shipScale = moonScale * 1.55;
+  const moonX = W * 0.71;
+  const shipX = W * 0.27;
+  // Both fighters slide in from their own edge over the first ~26 frames.
+  const enter = Math.min(1, bossIntroFrame / 26);
+  const ease = 1 - Math.pow(1 - enter, 3);
+  const offset = (1 - ease) * W * 0.3;
+
+  const keepBoss = { x: boss.x, y: boss.y };
+  const keepPlayer = { x: player.x, y: player.y, shrunk: player.shrunk };
+  const keepFacing = { x: facing.x, y: facing.y };
+
+  // The boss, at its phase-1 look: full health, no damage state, and its face
+  // tracking the ship it is about to fight rather than the ship's real position.
+  player.x = shipX - offset;
+  player.y = y;
+  drawBossPortrait(moonX + offset, y, moonScale, t);
+
+  // The ship, turned to face the boss.
+  ctx.save();
+  ctx.translate(shipX - offset, y);
+  ctx.scale(shipScale, shipScale);
+  ctx.translate(-(shipX - offset), -y);
+  player.shrunk = false;
+  facing.x = 1;
+  facing.y = 0;
+  drawPlayer();
+  ctx.restore();
+
+  boss.x = keepBoss.x; boss.y = keepBoss.y;
+  player.x = keepPlayer.x; player.y = keepPlayer.y; player.shrunk = keepPlayer.shrunk;
+  facing.x = keepFacing.x; facing.y = keepFacing.y;
+
+  drawVersusTear(t, midX);
+}
+
+// The rip between them: a jagged seam that splits open down the middle, white
+// hot at the core and bleeding red at the edges. The zigzag is a fixed pair of
+// sines rather than random per frame, so it opens instead of flickering.
+function drawVersusTear(t, midX) {
+  const open = Math.max(0, Math.min(1, (bossIntroFrame - 14) / 30));
+  if (open <= 0) return;
+  // Pointed at both ends: a seam that runs off the top and bottom of the screen
+  // reads as a red column, not as something torn open.
+  const gap = 22 * open;
+  const top = -20;
+  const bottom = H + 20;
+  const taper = (py) => Math.pow(Math.sin(Math.PI * Math.max(0, Math.min(1, (py - top) / (bottom - top)))), 0.65);
+  const flicker = 0.86 + Math.sin(t * 0.02) * 0.14;
+  const step = 24;
+
+  ctx.save();
+  ctx.lineJoin = "round";
+  ctx.beginPath();
+  for (let py = top; py <= bottom; py += step) {
+    const x = midX + Math.sin(py * 0.055) * 13 + Math.sin(py * 0.019 + 1.7) * 8;
+    if (py === top) ctx.moveTo(x - gap * taper(py), py); else ctx.lineTo(x - gap * taper(py), py);
+  }
+  for (let py = bottom; py >= top; py -= step) {
+    const x = midX + Math.sin(py * 0.055) * 13 + Math.sin(py * 0.019 + 1.7) * 8;
+    ctx.lineTo(x + gap * taper(py), py);
+  }
+  ctx.closePath();
+
+  const glow = ctx.createLinearGradient(midX - gap * 2, 0, midX + gap * 2, 0);
+  glow.addColorStop(0, "rgba(255, 42, 68, 0)");
+  glow.addColorStop(0.3, "rgba(255, 42, 68, " + (0.42 * flicker).toFixed(3) + ")");
+  glow.addColorStop(0.5, "rgba(255, 240, 236, " + (0.92 * flicker).toFixed(3) + ")");
+  glow.addColorStop(0.7, "rgba(255, 42, 68, " + (0.42 * flicker).toFixed(3) + ")");
+  glow.addColorStop(1, "rgba(255, 42, 68, 0)");
+  ctx.fillStyle = glow;
+  ctx.fill();
+  ctx.strokeStyle = "rgba(255, 90, 110, " + (0.75 * flicker).toFixed(3) + ")";
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // Embers riding the seam, seeded off the frame so they crawl upward.
+  ctx.fillStyle = "rgba(255, 220, 210, " + (0.8 * flicker).toFixed(3) + ")";
+  for (let i = 0; i < 9; i++) {
+    const py = (H + 60) * (((i * 0.137 + bossIntroFrame * 0.004) % 1)) - 30;
+    const x = midX + Math.sin(py * 0.055) * 13 + Math.sin(py * 0.019 + 1.7) * 8;
+    const side = i % 2 ? 1 : -1;
+    ctx.fillRect(Math.round(x + side * gap * (0.5 + (i % 3) * 0.25)), Math.round(py), 3, 3);
+  }
+  ctx.restore();
+}
+
+function drawDeathBackdrop(t) {
+  drawSceneBackdrop(deathScene, t);
+}
+
+// The reward and victory cards are moments in a place, not a cut away from it:
+// Mercury's pay-off keeps the star field its whole chapter flew through, and
+// Venus's keeps the furnace.
+function drawSceneBackdrop(scene, t) {
+  if (scene === "venus-sky") { drawVenusEnvironment(t); return; }
+  if (scene === "venus-arena") {
+    ctx.fillStyle = "#2a0d05";
+    ctx.fillRect(0, 0, W, H);
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.drawImage(bossGridLayer, 0, 0);
+    ctx.restore();
+    return;
+  }
+  drawStaticStars(t);
+}
+
+// ---------------------------------------------------------------------------
+// Hyperspace launch
+//
+// START does not fade into a fake progress bar any more — the ship jumps. Four
+// beats on the same fixed 60Hz clock as everything else:
+//
+//   wind-up  the drive pulls space inwards, streaks fall toward a growing core
+//   punch    the core detonates: white flash, shockwave rings, everything reverses
+//   tunnel   full hyperspace, streaks stretched to lines, the field breathing
+//   arrival  deceleration into a white flash that hands over to startGame()
+//
+// It reuses the `stars` pool rather than building a second one, so the whole
+// transition allocates nothing: `primeWarpStars()` just rewrites the fields.
+// ---------------------------------------------------------------------------
+const WARP_CHARGE = 30;
+const WARP_PUNCH = 6;
+const WARP_TUNNEL = 54;
+const WARP_ARRIVE = 18;
+const WARP_PUNCH_AT = WARP_CHARGE;
+const WARP_TUNNEL_AT = WARP_CHARGE + WARP_PUNCH;
+const WARP_ARRIVE_AT = WARP_TUNNEL_AT + WARP_TUNNEL;
+const WARP_TOTAL = WARP_ARRIVE_AT + WARP_ARRIVE;
+// White, warm and violet — plus one slot rewritten to the ship's own colour at
+// launch, so the jump is lit by the hull you picked.
+const warpStreakColors = ["#ffffff", "#ffd8a0", "#c88bff", "#ffffff"];
+let warpLaunch = null;
+let warpFlash = 0;
+// The jump's light is ONE radial gradient, built per launch and reused for both
+// the core and the tunnel haze (scaled around the centre for the core). It used
+// to go through drawGlow(), which bakes an offscreen canvas per colour+radius:
+// the tunnel's radius alone asked for a ~2700px sprite mid-sequence, which is a
+// guaranteed hitch on the very frame the warp is supposed to peak.
+let warpHaze = null;
+let warpHazeR = 0;
+let warpHazeW = 0;
+let warpHazeH = 0;
+
+function buildWarpHaze() {
+  const cx = W / 2;
+  const cy = H / 2;
+  warpHazeR = Math.max(80, Math.round(Math.hypot(W, H) * 0.5));
+  warpHazeW = W;
+  warpHazeH = H;
+  const gradient = ctx.createRadialGradient(cx, cy, 0, cx, cy, warpHazeR);
+  gradient.addColorStop(0, rgbaFromHex(playerColor, 0.6));
+  gradient.addColorStop(0.22, rgbaFromHex(playerColor, 0.26));
+  gradient.addColorStop(0.6, rgbaFromHex(playerColor, 0.07));
+  gradient.addColorStop(1, rgbaFromHex(playerColor, 0));
+  warpHaze = gradient;
+}
+
+// scale 1 covers the whole viewport; anything smaller is the core.
+function paintWarpHaze(alpha, scale) {
+  if (warpHazeW !== W || warpHazeH !== H) buildWarpHaze();
+  const cx = W / 2;
+  const cy = H / 2;
+  ctx.save();
+  if (scale !== 1) {
+    ctx.translate(cx, cy);
+    ctx.scale(scale, scale);
+    ctx.translate(-cx, -cy);
+  }
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle = warpHaze;
+  ctx.fillRect(cx - warpHazeR, cy - warpHazeR, warpHazeR * 2, warpHazeR * 2);
+  ctx.restore();
+  ctx.globalAlpha = 1;
+}
+
+function primeWarpStars() {
+  const reach = Math.hypot(W, H) * 0.5;
+  for (let i = 0; i < stars.length; i++) {
+    const s = stars[i];
+    const angle = rand(0, Math.PI * 2);
+    s.wcos = Math.cos(angle);
+    s.wsin = Math.sin(angle);
+    s.wd = rand(30, reach);
+    s.ws = rand(0.55, 1.5);
+    s.wc = i & 3;
+    s.ww = rand(0.8, 2.3);
+  }
+  warpStreakColors[3] = playerColor;
+}
+
+function beginWarpLaunch(callback) {
+  if (warpLaunch) return;
+  ensureAudio();
+  if (audioContext && audioContext.state === "suspended") audioContext.resume();
+  primeWarpStars();
+  buildWarpHaze();
+  warpFlash = 0;
+  warpLaunch = { frame: 0, callback };
+  dom.menu.classList.add("launching");
+  // display:none the moment the card's own animation ends, so a full-screen DOM
+  // layer is not still being composited over the tunnel.
+  setTimeout(() => dom.menu.classList.add("hidden"), 460);
+  // playSound is one fixed pitch per call, so the drive's rising whine is eight
+  // of them stacked up the scale rather than a single ramp.
+  for (let i = 0; i < 8; i++) {
+    setTimeout(() => playSound(150 + i * 165, 0.2, "sawtooth"), i * 72);
+  }
+}
+
+function warpSpeedAt(f) {
+  if (f <= WARP_PUNCH_AT) {
+    // Wind-up: space is pulled *in*, harder every frame.
+    const k = f / WARP_CHARGE;
+    return -(0.8 + k * k * 5.5);
+  }
+  if (f <= WARP_TUNNEL_AT) return 4 + (f - WARP_PUNCH_AT) * 5.5;
+  if (f <= WARP_ARRIVE_AT) {
+    const k = (f - WARP_TUNNEL_AT) / WARP_TUNNEL;
+    // Held near the top, breathing, easing off toward the exit.
+    return 30 - k * 7 + Math.sin(k * 17) * 1.8;
+  }
+  const k = (f - WARP_ARRIVE_AT) / WARP_ARRIVE;
+  return 23 * (1 - k) * (1 - k);
+}
+
+function drawWarpLaunch(t) {
+  const f = ++warpLaunch.frame;
+  const cx = W / 2;
+  const cy = H / 2;
+  const reach = Math.hypot(W, H) * 0.5 + 60;
+  const speed = warpSpeedAt(f);
+  const charging = f <= WARP_PUNCH_AT;
+  const chargeK = charging ? f / WARP_CHARGE : 1;
+
+  if (f === WARP_PUNCH_AT + 1) {
+    warpFlash = 0.85;
+    music.stop();
+    playSound(55, 0.7, "sawtooth");
+    playSound(120, 0.45, "triangle");
+    playSound(1400, 0.25, "square");
+  }
+
+  // The cabinet shakes hardest while the drive is winding up.
+  const shake = charging ? chargeK * chargeK * 7 : Math.max(0, 5 - (f - WARP_PUNCH_AT) * 0.4);
+  ctx.save();
+  if (shake > 0.2) ctx.translate(Math.sin(f * 1.9) * shake, Math.cos(f * 2.3) * shake * 0.7);
+
+  ctx.lineCap = "round";
+  const fade = charging ? 0.35 + chargeK * 0.65 : 1;
+  // Grouped by colour so the whole field is four strokeStyle writes, not 260.
+  for (let c = 0; c < warpStreakColors.length; c++) {
+    ctx.strokeStyle = warpStreakColors[c];
+    for (let i = 0; i < stars.length; i++) {
+      const s = stars[i];
+      if (s.wc !== c) continue;
+      const prev = s.wd;
+      if (speed < 0) s.wd += speed * s.ws * 1.9;
+      else s.wd = s.wd * (1 + 0.014 * speed) + speed * s.ws * 0.9;
+      const x1 = cx + s.wcos * prev;
+      const y1 = cy + s.wsin * prev;
+      const x2 = cx + s.wcos * s.wd;
+      const y2 = cy + s.wsin * s.wd;
+      // Streaks thicken and brighten as they come at you; distance does the
+      // perspective, so nothing needs a separate depth term.
+      const near = Math.min(1, s.wd / reach);
+      ctx.globalAlpha = Math.min(1, (0.25 + near * 0.9) * fade);
+      ctx.lineWidth = Math.max(0.6, s.ww * (0.4 + near * 1.5));
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+      // Recycled at whichever end it left through: outward past the corner, or
+      // inward into the drive.
+      if (s.wd > reach) {
+        const angle = rand(0, Math.PI * 2);
+        s.wcos = Math.cos(angle);
+        s.wsin = Math.sin(angle);
+        s.wd = rand(4, 40);
+      } else if (s.wd < 6) {
+        const angle = rand(0, Math.PI * 2);
+        s.wcos = Math.cos(angle);
+        s.wsin = Math.sin(angle);
+        s.wd = reach * rand(0.75, 1);
+      }
+    }
+  }
+  ctx.globalAlpha = 1;
+
+  // The jump point: a core that swells through the wind-up and blows out.
+  if (charging) {
+    const coreR = 3 + chargeK * chargeK * 34;
+    paintWarpHaze(0.35 + chargeK * 0.5, Math.max(0.05, coreR * 3 / warpHazeR));
+    ctx.globalAlpha = 0.35 + chargeK * 0.65;
+    ctx.fillStyle = "#ffffff";
+    ctx.beginPath();
+    ctx.arc(cx, cy, coreR * (0.45 + Math.sin(f * 0.5) * 0.05), 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+
+  // Three shockwave rings chasing each other out of the punch.
+  if (f > WARP_PUNCH_AT && f < WARP_PUNCH_AT + 46) {
+    ctx.lineWidth = 3;
+    for (let i = 0; i < 3; i++) {
+      const age = f - WARP_PUNCH_AT - i * 7;
+      if (age <= 0) continue;
+      const alpha = 0.6 - age * 0.022;
+      if (alpha <= 0) continue;
+      ctx.globalAlpha = alpha;
+      ctx.strokeStyle = i === 1 ? playerColor : "#ffffff";
+      ctx.beginPath();
+      ctx.arc(cx, cy, age * 30, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // Tunnel walls: the theme colour bleeding in from the edges of the screen.
+  if (f > WARP_TUNNEL_AT) {
+    const bleed = 0.1 + Math.sin(f * 0.22) * 0.03;
+    ctx.globalAlpha = bleed;
+    ctx.fillStyle = playerColor;
+    ctx.fillRect(0, 0, W, 3);
+    ctx.fillRect(0, H - 3, W, 3);
+    ctx.globalAlpha = 1;
+    paintWarpHaze(0.5, 1);
+  }
+  ctx.restore();
+
+  if (f >= WARP_TOTAL) {
+    const callback = warpLaunch.callback;
+    warpLaunch = null;
+    // Arrive through white: the flash outlives the sequence by a few frames and
+    // is painted over the first frames of the wave itself.
+    warpFlash = 1;
+    dom.menu.classList.remove("launching");
+    callback();
+  }
+}
+
 function resetStarOutward(s) {
   const angle = rand(0, Math.PI * 2);
   s.spawnDistance = rand(8, 60);
@@ -859,6 +1442,10 @@ function drawStars(t) {
 }
 
 const STEP_MS = 1000 / 60;
+// 1 unless the BUILDER console changes it. Scaling the accumulator rather than
+// STEP_MS keeps every frame-count timer in the file meaning the same thing;
+// the game still runs whole 1/60s ticks, just more or fewer of them per second.
+let devTimeScale = 1;
 const MAX_CATCHUP_STEPS = 2;
 let lastFrameTime = 0;
 let stepAccumulator = 0;
@@ -901,7 +1488,7 @@ function frame(now) {
   requestAnimationFrame(frame);
   if (!lastFrameTime) lastFrameTime = now;
   // Clamped so a backgrounded tab doesn't come back and replay a minute of ticks.
-  stepAccumulator += Math.min(now - lastFrameTime, STEP_MS * MAX_CATCHUP_STEPS);
+  stepAccumulator += Math.min(now - lastFrameTime, STEP_MS * MAX_CATCHUP_STEPS) * devTimeScale;
   lastFrameTime = now;
   if (stepAccumulator < STEP_MS) return;
   let steps = 0;
@@ -915,21 +1502,39 @@ function frame(now) {
 }
 
 function draw(t) {
-  // drawBossArea/drawTestRoom fill every pixel themselves, so clearing to black
-  // first is a second full-screen fill for nothing — the priciest kind of no-op.
-  const arenaRepaints = gameActive && !gamePaused && !bossIntro && (bossMode || testMode);
+  if (builder.isOpen()) builder.paintWatches();
+  // drawBossArea fills every pixel itself, so clearing to black first is a
+  // second full-screen fill for nothing — the priciest kind of no-op.
+  const arenaRepaints = gameActive && !gamePaused && !bossIntro && bossMode;
   if (!arenaRepaints) {
     ctx.fillStyle = "#000000";
     ctx.fillRect(0, 0, W, H);
   } else if (screenShakeFrames > 0) {
     // Prepaint the arena colour so a translated hit frame never exposes stale
     // pixels along the viewport edge.
-    ctx.fillStyle = bossMode ? "#16051f" : "#07131a";
+    ctx.fillStyle = bossMode ? (bossKind === "venus" ? "#2a0d05" : "#000000") : "#07131a";
     ctx.fillRect(0, 0, W, H);
   }
   centerX = W / 2;
   centerY = H / 2;
-  if (!gameActive) drawStaticStars(t);
+  if (warpLaunch) { drawWarpLaunch(t); drawWarpFlash(); return; }
+  if (celebrationScene) drawSceneBackdrop(celebrationScene, t);
+  // `bossIntro` is also raised by the victory and reward beats to freeze the
+  // world, so the stage keys off the card actually being on screen — otherwise
+  // the ship, the planet and the tear paint straight through those screens.
+  if (gameActive && versusCardUp && !bossMode) drawVersusStage(t);
+  // Dying does not change where you are: the game-over screen holds the sky of
+  // the level that killed you instead of cutting to the menu's field.
+  if (!gameActive) {
+    if (gameOverShown) drawDeathBackdrop(t);
+    else drawStaticStars(t);
+    // A boss defeat card gets the boss itself, drawn the way the fight draws it,
+    // rather than a CSS lookalike that is a different planet.
+    if (defeatPortrait) drawBossPortrait(W / 2, H * 0.27, Math.max(1, Math.min(2.1, Math.min(W, H) / 520)), t);
+    // The LEVELS previews ride the same rAF rather than opening a loop of their
+    // own, and only while the panel is actually on screen.
+    if (dom.levelsPanel.classList.contains("visible")) paintLevelPreviews(t);
+  }
   // The regular star field remains; no oversized warp sparkles behind GAME OVER.
   if (gameActive && !gamePaused) {
     if (screenShakeFrames > 0) {
@@ -948,8 +1553,20 @@ function draw(t) {
       drawGame(t);
     }
   }
+  drawWarpFlash();
   updateChargeMeter();
   setText(dom.waveNumber, String(wave));
+}
+
+// Painted last, over whatever else the frame drew, so the arrival flash can
+// wash out the first frames of the wave it just dropped you into.
+function drawWarpFlash() {
+  if (warpFlash <= 0.02) { warpFlash = 0; return; }
+  ctx.globalAlpha = Math.min(1, warpFlash);
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, W, H);
+  ctx.globalAlpha = 1;
+  warpFlash *= 0.82;
 }
 
 // Waves after Mercury enter Venus's dense upper atmosphere.
@@ -1044,7 +1661,7 @@ function drawVenusDeck(deck, t) {
 }
 
 function drawVenusEnvironment(t) {
-  if (wave < 6 || bossMode || testMode) return;
+  if (wave < 6 || bossMode) return;
   if (venusAtmosphereH !== H || venusAtmosphereW !== W) buildVenusAtmosphere();
 
   ctx.fillStyle = venusSkyGradient;
@@ -1061,7 +1678,9 @@ function drawVenusEnvironment(t) {
     venusFlash = 9;
     venusFlashX = rand(W * 0.12, W * 0.88);
     venusFlashTimer = Math.round(rand(150, 420));
-    playSound(48, 0.34, "sawtooth");
+    // The sky keeps flashing behind GAME OVER; the thunder would not read as
+    // ambience there, just as a stray hit.
+    if (gameActive) playSound(48, 0.34, "sawtooth");
   }
 
   ctx.save();
@@ -1213,7 +1832,7 @@ const WAVE_INTROS = {
   2: "CHARGERS INBOUND",
   3: "TURRETS DEPLOYED",
   4: "MIXED ASSAULT",
-  5: "FINAL WAVE BEFORE MERCURY",
+  5: "FINAL WAVE BEFORE THE MOON",
   6: "ENTERING VENUS AIRSPACE",
   7: "ACID SKIMMERS INBOUND",
   8: "FURNACE BLOOMS OPENING",
@@ -1484,8 +2103,6 @@ function collectSuperTargets() {
   if (bossMode) {
     if (!bossDying) pushSuperTarget(boss.x, boss.y, bossRadius(), null, "boss");
     for (const m of bossMinions) if (m.health > 0) pushSuperTarget(m.x, m.y, 13, m, "minion");
-  } else if (testMode) {
-    pushSuperTarget(W / 2, 190, 58, null, "dummy");
   } else {
     for (const enemy of enemies) {
       if (!enemy.alive) continue;
@@ -1507,10 +2124,6 @@ function hurtSuperTarget(slot, amount, fromX, fromY) {
   } else if (slot.kind === "boss") {
     if (bossDying) return;
     damageBoss(amount, fromX, fromY);
-    superDamage += amount;
-    updateSuperMeter();
-  } else {
-    testDamage += amount;
     superDamage += amount;
     updateSuperMeter();
   }
@@ -1894,7 +2507,7 @@ function updateDecoy(t) {
   decoy.phase += 0.12;
   if (decoy.flash > 0) decoy.flash--;
   // contact damage: a charger that rams the hologram spends itself on it
-  if (!bossMode && !testMode) {
+  if (!bossMode) {
     for (const enemy of enemies) {
       if (!enemy.alive || enemy.type !== "charger") continue;
       if (Math.abs(enemy.x - decoy.x) < DECOY_HALF_W + enemy.w && Math.abs(enemy.y - decoy.y) < DECOY_HALF_H + enemy.h) {
@@ -2450,7 +3063,7 @@ function updateEnemyBullets() {
     ctx.restore();
     const hitWidth = player.shrunk ? 13 : 22;
     const hitHeight = player.shrunk ? 14 : 24;
-    if (!adminInvincible && playerInvulnerable === 0 && Math.abs(bullet.x - player.x) < hitWidth && Math.abs(bullet.y - player.y) < hitHeight) {
+    if (!devGodMode && playerInvulnerable === 0 && Math.abs(bullet.x - player.x) < hitWidth && Math.abs(bullet.y - player.y) < hitHeight) {
       hurtPlayer();
       bullet.y = H + 200;
       if (!gameActive) return;
@@ -2527,6 +3140,9 @@ function drawGame(t) {
       if (fireCone(aimX, aimY)) fireCooldown = player.shrunk ? 54 : 18;
     } else if (selectedWeapon === "blaster") {
       fireInDirection(aimX, aimY);
+      // After the shot: fireInDirection is what flips the wingtip, and the
+      // sound is panned to the tip that actually fired.
+      weaponSfx.blaster(blasterBarrel);
       fireCooldown = player.shrunk ? 30 : 10;
     } else if (selectedWeapon === "tech0") {
       if (fireInDirection(aimX, aimY, 3, "tech0", 5)) {
@@ -2537,19 +3153,35 @@ function drawGame(t) {
         const shot = bullets[bullets.length - 1];
         shot.vx *= 1.4;
         shot.vy *= 1.4;
-        playSound(240, 0.09, "sawtooth");
-        playSound(1240, 0.05, "square");
+        weaponSfx.tech0();
         spawnSparks(player.x + facing.x * 22, player.y + facing.y * 22, 6, WEAPON_COLORS.tech0,
           { minSpeed: 1, maxSpeed: 3.4, life: 16, maxSize: 3 });
+      }
+    } else if (selectedWeapon === "magma") {
+      if (fireInDirection(aimX, aimY, MAGMA_DAMAGE, "magma", 12)) {
+        fireCooldown = player.shrunk ? MAGMA_SHRUNK_CYCLE : MAGMA_CYCLE;
+        // Heavy round: slower than everything else, and it tumbles.
+        const shot = bullets[bullets.length - 1];
+        shot.vx *= MAGMA_SPEED;
+        shot.vy *= MAGMA_SPEED;
+        shot.spin = Math.random() * Math.PI * 2;
+        shot.tick = 0;
+        weaponSfx.magma();
+        spawnSparks(player.x + facing.x * 22, player.y + facing.y * 22, 6, "#ffb03a",
+          { minSpeed: 1, maxSpeed: 3, life: 16, maxSize: 3, angle: Math.atan2(facing.y, facing.x), spread: 0.9 });
       }
     }
   }
 
+  // Mercury chapter backdrop. Waves 1-5 and the boss intro card share the menu's
+  // drifting star field, so nothing in the chapter ever cuts from a sky full of
+  // stars to a black void. The boss arena repaints itself in drawBossArea, and
+  // Venus keeps its own sky (drawVenusEnvironment).
+  if (bossIntro ? bossKind !== "venus" : !bossMode && wave < 6) drawStaticStars(t);
   if (bossIntro) return;
   if (playerInvulnerable > 0) playerInvulnerable--;
   if (invincibilitySuperTimer > 0) invincibilitySuperTimer--;
   if (bossMode) { drawBossArea(t); return; }
-  if (testMode) { drawTestRoom(); return; }
   drawVenusEnvironment(t);
 
   for (const bomb of superBombs) {
@@ -2596,6 +3228,7 @@ function drawGame(t) {
   }
   compact(bullets, (b) => b.x > -20 && b.x < W + 20 && b.y > -20 && b.y < H + 20);
   updateSparks();
+  updateMuzzleFlashes();
 
   enemyShotTimer--;
   if (enemyShotTimer <= 0) {
@@ -2627,12 +3260,13 @@ function drawGame(t) {
     drawEnemy(enemy, ey, time);
 
     const playerHitbox = player.shrunk ? 8 : 16;
-    if (!adminInvincible && playerInvulnerable === 0 && Math.abs(player.x - enemy.x) < enemy.w + playerHitbox && Math.abs(player.y - ey) < enemy.h + playerHitbox) {
+    if (!devGodMode && playerInvulnerable === 0 && Math.abs(player.x - enemy.x) < enemy.w + playerHitbox && Math.abs(player.y - ey) < enemy.h + playerHitbox) {
       hurtPlayer();
       if (!gameActive) return;
     }
 
     for (const bullet of bullets) {
+      if (bullet.ignore === enemy) continue;
       if (Math.abs(bullet.x - enemy.x) < enemy.w + 4 && Math.abs(bullet.y - ey) < enemy.h + 6) {
         const hitX = enemy.x;
         const hitY = ey;
@@ -2640,9 +3274,12 @@ function drawGame(t) {
         if (bullet.type === "tech0") {
           bullet.y = -100;
           startTechChain(enemy, hitX, hitY);
-        } else if (bullet.pierceRemaining !== Infinity) {
-          bullet.pierceRemaining--;
-          if (bullet.pierceRemaining <= 0) bullet.y = -100;
+        } else {
+          if (bullet.type === "magma") burstMagma(bullet, hitX, hitY, enemy);
+          if (bullet.pierceRemaining !== Infinity) {
+            bullet.pierceRemaining--;
+            if (bullet.pierceRemaining <= 0) bullet.y = -100;
+          }
         }
         break;
       }
@@ -2650,14 +3287,42 @@ function drawGame(t) {
     if (superBeam) damageAlongBeam(enemy, ey);
   }
   updateTechChains(t);
+  // Failsafe: anything still living far outside the arena burns up in the
+  // storm instead of stalling the wave. Every enemy update clamps well inside
+  // these bounds, so this only ever catches strays the player could neither
+  // see nor hit — the wave can never softlock on one again.
+  for (const enemy of enemies) {
+    if (!enemy.alive) continue;
+    const strayY = enemy.renderY === undefined ? enemy.y : enemy.renderY;
+    const lost = !Number.isFinite(enemy.x) || !Number.isFinite(strayY);
+    if (lost || enemy.x < -80 || enemy.x > W + 80 || strayY < -80 || strayY > H + 80) {
+      enemy.alive = false;
+      enemy.health = 0;
+      const sparkX = Number.isFinite(enemy.x) ? Math.max(0, Math.min(W, enemy.x)) : W / 2;
+      const sparkY = Number.isFinite(strayY) ? Math.max(0, Math.min(H, strayY)) : H / 2;
+      spawnSparks(sparkX, sparkY, 10, "#ff8a3d", { minSpeed: 0.5, maxSpeed: 3, life: 24 });
+      console.warn("Retired stray " + enemy.type + (lost ? " (position lost)" : " at " + Math.round(enemy.x) + "," + Math.round(strayY)));
+    }
+  }
   let anyAlive = false;
   for (const enemy of enemies) if (enemy.alive) { anyAlive = true; break; }
   if (!anyAlive) {
     bullets = [];
     techChains = [];
     enemyBullets = [];
-    if (wave === 5) { enterBossArea("mercury"); return; }
+    recordWaveCleared(wave);
+    if (wave === 5) { enterBossArea("moon"); return; }
     if (wave === 9) { wave = 10; setText(dom.waveNumber, "10"); enterBossArea("venus"); return; }
+    // A cleared wave ends every timed effect: duration supers (shield, beam,
+    // star, mirror, drone, decoy, orb), bombs still in flight and their blasts
+    // all die with the wave instead of leaking into the next one. Boss entries
+    // return above and tear down in enterBossArea instead.
+    clearSuperEntities();
+    superBeam = null;
+    superBombs = [];
+    bombBlasts = [];
+    playerInvulnerable = 0;
+    invincibilitySuperTimer = 0;
     player.x = W / 2;
     player.y = playerStartY();
     player.vx = 0;
@@ -3132,7 +3797,7 @@ function drawEnemy(enemy, ey, time) {
   ctx.restore();
 }
 
-function enterBossArea(kind = "mercury") {
+function enterBossArea(kind = "moon") {
   bossKind = kind;
   bossMode = false;
   bossIntro = true;
@@ -3141,11 +3806,13 @@ function enterBossArea(kind = "mercury") {
   resetBossAnimation();
   setText(document.getElementById("boss-health-name"), bossLabel());
   setText(document.getElementById("boss-intro-name"), bossLabel());
+  setText(document.getElementById("boss-intro-hp"), bossMaxHealth() + " HP");
   bossShotTimer = 64;
   bossAttackTimer = 150;
   bossBullets = [];
   techChains = [];
   document.getElementById("boss-health").classList.add("visible");
+  document.getElementById("boss-health").classList.toggle("venus", kind === "venus");
   // through setWidth, so the change-detection cache doesn't go stale and skip
   // the first real write of the next fight
   setWidth(dom.bossFill, 0);
@@ -3156,7 +3823,19 @@ function enterBossArea(kind = "mercury") {
   setTimeout(() => bossHealth.classList.remove("filling"), 1600);
   player.x = W / 2; player.y = playerStartY(); player.vx = 0; player.vy = 0;
   document.getElementById("boss-player-name").textContent = playerName;
-  document.getElementById("boss-intro").classList.add("visible");
+  const intro = document.getElementById("boss-intro");
+  // The portrait is the defeat screen's laughing planet, so it repaints for
+  // whichever boss is being announced.
+  intro.classList.toggle("venus", kind === "venus");
+  // Restart the entrance: the card is reused for every boss in a run.
+  intro.classList.remove("visible");
+  void intro.offsetWidth;
+  intro.classList.add("visible");
+  bossIntroFrame = 0;
+  versusCardUp = true;
+  // Nothing but the two fighters: the wave counter, score, hearts, super meter
+  // and the boss bar all belong to the fight, not to the card announcing it.
+  dom.gameUi.classList.add("versus");
   syncMobileControls();
   focusMenuDefault(dom.bossIntro);
 }
@@ -3196,6 +3875,14 @@ function resetBossAnimation() {
   bossPhaseFlash = 0;
   bossMinions = [];
   bossMinionTimer = 260;
+  moonImpacts = [];
+  moonImpactTimer = 150;
+  moonPull = 0;
+  moonPullTimer = 620;
+  moonEclipse = 0;
+  moonEclipseTimer = 0;
+  moonLit = MOON_PHASE_LIGHT[0];
+  moonLibration = 0;
   clearSuperEntities();
 }
 
@@ -3209,8 +3896,10 @@ function resetBossAnimation() {
 // itself. `bossMinions` are chips of rock that home in and have to be shot down
 // or dodged, so late in the fight the arena is never empty.
 // ---------------------------------------------------------------------------
-const PHASE_RATE = [1, 0.76, 0.56];        // timer multiplier per phase
-const MINION_CAP = 7;
+const PHASE_RATE = [1, 0.82, 0.66];        // timer multiplier per phase
+// Five, not seven. Seven homing chips is a screen the player has to clear
+// before they can look at anything else, and phase 2 sat on the cap.
+const MINION_CAP = 5;
 
 function phaseFor(health, max) {
   const ratio = Math.max(0, health) / max;
@@ -3235,24 +3924,30 @@ function updateBossPhase() {
     x: boss.x, y: boss.y, minSpeed: 1.5, maxSpeed: 7, minSize: 2, maxSize: 6, life: 44,
     colors: bossKind === "venus"
       ? ["#fff2c8", "#ffab4a", "#c96b23", "#7a3f18"]
-      : ["#ffffff", "#ffdc5a", "#c9c9c9", "#6f6f6f"],
+      : ["#ffffff", "#e9e6dc", "#a5a29b", "#5c5a56"],
     gravity: 0.04, drag: 0.98,
   });
-  bossHitFlash = BOSS_HIT_FRAMES;   // Mercury has no phase art of its own; the damage flash carries it
+  bossHitFlash = BOSS_HIT_FRAMES;
   playSound(58, 0.9, "sawtooth");
   playSound(190, 0.3, "square");
-  showWaveBanner(bossLabel(), bossPhase === 3 ? "FINAL PHASE" : `PHASE ${bossPhase}`);
-  if (bossKind === "mercury") {
-    // the shell cracking is what throws the first brood out
+  // The Moon's phases have names of their own, and the terminator is already
+  // moving to match — the banner is only telling you what you can see.
+  showWaveBanner(bossLabel(), bossKind === "moon"
+    ? MOON_PHASE_NAME[bossPhase - 1]
+    : bossPhase === 3 ? "FINAL PHASE" : `PHASE ${bossPhase}`);
+  if (bossKind === "moon") {
+    // the crust breaking is what throws the first ejecta out, and it opens the
+    // new phase with a strike so the step-up is never a free second
     for (let i = 0; i < bossPhase; i++) spawnBossMinion(rand(0, Math.PI * 2));
     bossMinionTimer = 90;
+    moonImpactTimer = 40;
   }
   return true;
 }
 
 function spawnBossMinion(angle) {
   if (bossMinions.length >= MINION_CAP) return;
-  const dist = BOSS_RADIUS * 0.9;
+  const dist = MOON_RADIUS * 0.9;
   bossMinions.push({
     x: boss.x + Math.cos(angle) * dist,
     y: boss.y + Math.sin(angle) * dist,
@@ -3328,19 +4023,20 @@ function updateBossMinions() {
 
     const hitWidth = player.shrunk ? 12 : 20;
     const hitHeight = player.shrunk ? 13 : 22;
-    if (!adminInvincible && playerInvulnerable === 0 && Math.abs(m.x - player.x) < hitWidth && Math.abs(m.y - player.y) < hitHeight) {
+    if (!devGodMode && playerInvulnerable === 0 && Math.abs(m.x - player.x) < hitWidth && Math.abs(m.y - player.y) < hitHeight) {
       hurtPlayer();
       m.health = 0;
       if (!gameActive) return;
     }
     for (const bullet of bullets) {
-      if (bullet.y < -50) continue;
+      if (bullet.y < -50 || bullet.ignore === m) continue;
       if (Math.abs(bullet.x - m.x) < 16 && Math.abs(bullet.y - m.y) < 16) {
         m.health -= bullet.damage || 1;
         m.hitFlash = 6;
         superDamage += bullet.damage || 1;
         updateSuperMeter();
         if (bullet.type === "tech0") startTechChainBoss(m.x, m.y, m);
+        if (bullet.type === "magma") burstMagma(bullet, m.x, m.y, m);
         if (bullet.pierceRemaining !== Infinity) {
           bullet.pierceRemaining--;
           if (bullet.pierceRemaining <= 0) bullet.y = -100;
@@ -3371,7 +4067,7 @@ function spawnBossShards(count) {
     bossShards.push({
       angle: rand(0, Math.PI * 2),
       speed: rand(0.004, 0.011) * (Math.random() < 0.5 ? -1 : 1),
-      dist: BOSS_RADIUS * rand(1.12, 1.5),
+      dist: MOON_RADIUS * rand(1.12, 1.5),
       flatten: rand(0.2, 0.85),
       size: rand(4, 11),
       spin: rand(0, Math.PI * 2),
@@ -3409,50 +4105,70 @@ function drawBossShards(front) {
 
 function startBossFight() {
   bossIntro = false; bossMode = true;
+  versusCardUp = false;
+  dom.gameUi.classList.remove("versus");
   document.getElementById("boss-intro").classList.remove("visible");
   syncMobileControls();
   music.play(bossKind === "venus" ? "venusBoss" : "boss");
   showWaveBanner(bossLabel(), bossKind === "venus" ? "SURVIVE THE FURNACE" : "DESTROY THE PLANET");
 }
 
-const BOSS_MAX_HEALTH = 110;
-const BOSS_RADIUS = 78;
+const MOON_MAX_HEALTH = 110;
+const MOON_RADIUS = 78;
+// The lit fraction of the disc in each phase, and what the banner calls it: the
+// boss phase *is* the lunar phase, opening as a crescent and finishing full.
+const MOON_PHASE_LIGHT = [0.24, 0.56, 1];
+const MOON_PHASE_NAME = ["CRESCENT", "HALF MOON", "FULL MOON"];
 // Venus is the second boss: bigger, tougher, and with attacks that cover the
 // arena instead of aiming a line at the ship.
-const VENUS_MAX_HEALTH = 210;
+const VENUS_MAX_HEALTH = 250;
 const VENUS_RADIUS = 96;
 
-function bossRadius() { return bossKind === "venus" ? VENUS_RADIUS : BOSS_RADIUS; }
-function bossMaxHealth() { return bossKind === "venus" ? VENUS_MAX_HEALTH : BOSS_MAX_HEALTH; }
-function bossLabel() { return bossKind === "venus" ? "VENUS" : "MERCURY"; }
+function bossRadius() { return bossKind === "venus" ? VENUS_RADIUS : MOON_RADIUS; }
+function bossMaxHealth() { return bossKind === "venus" ? VENUS_MAX_HEALTH : MOON_MAX_HEALTH; }
+function bossLabel() { return bossKind === "venus" ? "VENUS" : "THE MOON"; }
 const BOSS_HIT_FRAMES = 12;
 const BOSS_SHOOT_FRAMES = 20;
 const BOSS_CHARGE_FRAMES = 26;
 const BOSS_DEATH_FRAMES = 175;
 const BROW_SIDES = [-1, 1];
 
-// Mercury's gradients: the body and terminator are fixed in the planet's local
-// space, the corona varies only with its radius and colour.
+// The Moon's gradients: the body is fixed in the planet's local space, the
+// corona varies only with its radius and colour.
 let bodyGradient = null;
 let shadeGradient = null;
 let auraGradient = null;
 let auraGradientRadius = 0;
 let auraGradientColor = "";
 
-// Fixed surface features, so Mercury reads as the same rock every frame while
-// the whole crater field rotates slowly under the clip.
-const BOSS_CRATERS = [
+// Fixed surface features. The Moon is tidally locked — it has shown the Earth
+// the same face for four billion years — so unlike a spinning planet this field
+// never rotates. It is the same rock in the same place every frame, which is
+// exactly why the damage scars read as damage.
+const MOON_CRATERS = [
   { a: 0.4, d: 0.42, r: 13 }, { a: 1.7, d: 0.62, r: 9 }, { a: 2.6, d: 0.3, r: 16 },
   { a: 3.5, d: 0.7, r: 7 }, { a: 4.3, d: 0.5, r: 11 }, { a: 5.2, d: 0.28, r: 8 },
   { a: 5.9, d: 0.68, r: 12 }, { a: 2.1, d: 0.85, r: 6 }, { a: 4.9, d: 0.86, r: 5 },
+  { a: 0.95, d: 0.78, r: 7 }, { a: 3.05, d: 0.88, r: 5 }, { a: 5.55, d: 0.82, r: 6 },
 ];
-// Crack seeds in unit space; revealed progressively as Mercury loses health.
-const BOSS_CRACKS = [
-  [[-0.97, -0.05], [-0.78, -0.26], [-0.66, -0.55], [-0.42, -0.72]],
-  [[-0.9, 0.28], [-0.66, 0.46], [-0.38, 0.68], [-0.06, 0.84]],
-  [[0.95, -0.14], [0.76, -0.34], [0.64, -0.6], [0.4, -0.78]],
-  [[0.9, 0.26], [0.66, 0.47], [0.42, 0.7], [0.12, 0.86]],
-  [[-0.3, 0.9], [-0.02, 0.74], [0.26, 0.88], [0.5, 0.7]],
+// The dark seas. Kept out toward the limb so they frame the face instead of
+// swallowing it.
+const MOON_MARIA = [
+  { x: -0.46, y: -0.44, rx: 0.28, ry: 0.20, a: 0.5 },
+  { x: 0.44, y: -0.40, rx: 0.22, ry: 0.16, a: -0.4 },
+  { x: 0.58, y: 0.30, rx: 0.24, ry: 0.19, a: 0.9 },
+  { x: -0.58, y: 0.34, rx: 0.22, ry: 0.16, a: -0.7 },
+  { x: 0.0, y: -0.72, rx: 0.26, ry: 0.13, a: 0.1 },
+];
+// Fresh craters punched by the player, revealed as the health bar drains. On an
+// airless world a new impact throws bright rays of ejecta clear across the face,
+// which is what makes these read as damage rather than more scenery.
+const MOON_SCARS = [
+  { x: -0.30, y: -0.60, r: 0.085, seed: 0.3 },
+  { x: 0.62, y: -0.14, r: 0.075, seed: 1.1 },
+  { x: 0.34, y: 0.62, r: 0.09, seed: 2.4 },
+  { x: -0.64, y: 0.16, r: 0.07, seed: 3.6 },
+  { x: -0.12, y: 0.80, r: 0.08, seed: 4.9 },
 ];
 
 function spawnBossParticles(count, options) {
@@ -3503,11 +4219,14 @@ function updateBossExplosions() {
     const progress = 1 - boom.life / boom.maxLife;
     const radius = boom.max * (0.25 + progress * 0.75);
     const fade = Math.max(0, 1 - progress);
+    // Venus burns; the Moon has nothing to burn, so its blasts are the dust
+    // they actually kick up.
+    const cold = bossKind === "moon";
     ctx.globalAlpha = fade * 0.55;
-    ctx.fillStyle = progress < 0.4 ? "#fff3c4" : "#ff8a32";
+    ctx.fillStyle = progress < 0.4 ? (cold ? "#fdfbf5" : "#fff3c4") : (cold ? "#a8a49c" : "#ff8a32");
     ctx.beginPath(); ctx.arc(boom.x, boom.y, radius * 0.72, 0, Math.PI * 2); ctx.fill();
     ctx.globalAlpha = fade;
-    ctx.strokeStyle = "#ffdc5a";
+    ctx.strokeStyle = cold ? "#e9e6dc" : "#ffdc5a";
     ctx.lineWidth = 4 * fade + 1;
     ctx.beginPath(); ctx.arc(boom.x, boom.y, radius, 0, Math.PI * 2); ctx.stroke();
     ctx.globalAlpha = 1;
@@ -3515,7 +4234,7 @@ function updateBossExplosions() {
   compact(bossExplosions, (boom) => boom.life > 0);
 }
 
-// Mercury takes a hit: flash, recoil, and spit rock chips back along the shot.
+// The boss takes a hit: flash, recoil, and spit rock chips back along the shot.
 function damageBoss(amount, fromX, fromY) {
   if (bossDying) return;
   boss.health -= amount;
@@ -3575,7 +4294,7 @@ function updateBossDeath() {
   // stage 1: rupture — chained blasts crawling over the surface
   if (elapsed < 120 && elapsed % 8 === 0) {
     const angle = rand(0, Math.PI * 2);
-    const dist = rand(0, BOSS_RADIUS * 0.85);
+    const dist = rand(0, bossRadius() * 0.85);
     const x = boss.x + Math.cos(angle) * dist;
     const y = boss.y + Math.sin(angle) * dist;
     bossExplosions.push({ x, y, r: 0, max: rand(26, 58), life: 16, maxLife: 16 });
@@ -3602,9 +4321,13 @@ function updateBossDeath() {
 }
 
 function finishBossDeath() {
+  // Mercury stands on wave 5 and Venus on wave 10; beating one clears its wave,
+  // which is what opens the next chapter's first stage in LEVELS.
+  recordWaveCleared(bossKind === "venus" ? 10 : 5);
   bossDying = false;
   bossMode = false;
   document.getElementById("boss-health").classList.remove("visible");
+  document.getElementById("boss-health").classList.remove("venus");
   bullets = [];
   bossBullets = [];
   enemyBullets = [];
@@ -3614,28 +4337,237 @@ function finishBossDeath() {
   lives++;
   setLives(lives, true);
   if (bossKind === "venus") {
-    // Venus has no reward screen of its own yet — the run simply carries on
-    // into the waves past the furnace with the extra heart already granted.
-    bossKind = "mercury";
+    // Venus pays out Magma on its own reward screen, then the run carries on
+    // past the furnace with the extra heart already granted.
+    bossKind = "moon";
     bossDefeated = true;
     wave = 11;
     player.x = W / 2; player.y = playerStartY(); player.vx = 0; player.vy = 0;
-    music.play("battle");
-    createEnemies();
-    showWaveBanner("VENUS DESTROYED", "+1 HEART");
-    announceWave(11, 1800);
+    showVenusRewards();
     return;
   }
-  wave = 6;
+  // The run ends here while Venus is out, so the HUD stays on the wave that was
+  // actually played instead of announcing a chapter that is not in the game.
+  wave = 5;
   if (!bossDefeated) {
     bossDefeated = true;
     showVictory();
   }
 }
 
-function drawMercury(t) {
+// ---------------------------------------------------------------------------
+// The Moon's body, as one reusable painter.
+//
+// Both the arena and the menu's MOON UPDATE badge draw the Moon, and they have
+// to be the same Moon — a hand-made CSS lookalike drifted from the real thing
+// immediately and read as a different character. So the body lives here and
+// `drawMoon` is only the part that knows about the fight: the shake, the squash,
+// the halo, the debris, the slam ring.
+//
+// Everything is drawn in the boss's own space at `MOON_RADIUS`; the caller
+// scales. `g` is any 2D context, so gradients are cached per context rather than
+// in a module-level variable — a CanvasGradient belongs to the context that
+// made it and cannot be handed to another one.
+// ---------------------------------------------------------------------------
+function moonBodyGradient(g) {
+  const R = MOON_RADIUS;
+  if (!g.__moonBody) {
+    const grad = g.createRadialGradient(-R * 0.34, -R * 0.38, R * 0.12, 0, 0, R);
+    grad.addColorStop(0, "#fbf8f1");
+    grad.addColorStop(0.4, "#cbc7bf");
+    grad.addColorStop(0.76, "#8a8781");
+    grad.addColorStop(1, "#3b3936");
+    g.__moonBody = grad;
+  }
+  return g.__moonBody;
+}
+
+// o: { t, lit, damage, charge, shoot, hit, eclipsed, dying, shut, lookX, lookY, glow }
+function paintMoonBody(g, o) {
+  const R = MOON_RADIUS;
+
+  g.fillStyle = moonBodyGradient(g);
+  g.beginPath(); g.arc(0, 0, R, 0, Math.PI * 2); g.fill();
+
+  // Maria, craters, scars, terminator and face all clip to the same disc.
+  // Clipping is one of the priciest canvas calls, so set it once.
+  g.save();
+  g.beginPath(); g.arc(0, 0, R, 0, Math.PI * 2); g.clip();
+
+  // maria — the dark seas, kept out toward the limb so the face still reads
+  for (const m of MOON_MARIA) {
+    g.fillStyle = "rgba(58, 57, 62, 0.34)";
+    g.beginPath();
+    g.ellipse(m.x * R, m.y * R, m.rx * R, m.ry * R, m.a, 0, Math.PI * 2);
+    g.fill();
+  }
+
+  // craters, with the light coming from the upper left like the body gradient
+  for (const crater of MOON_CRATERS) {
+    const x = Math.cos(crater.a) * crater.d * R;
+    const y = Math.sin(crater.a) * crater.d * R;
+    g.fillStyle = "rgba(38, 37, 36, 0.34)";
+    g.beginPath(); g.arc(x, y, crater.r, 0, Math.PI * 2); g.fill();
+    g.fillStyle = "rgba(255, 255, 255, 0.17)";
+    g.beginPath(); g.arc(x - crater.r * 0.28, y - crater.r * 0.3, crater.r * 0.62, 0, Math.PI * 2); g.fill();
+  }
+
+  // --- battle damage -------------------------------------------------------
+  // Not lava — the Moon has none. Damage punches fresh craters, and a fresh
+  // crater on an airless world throws bright rays of ejecta right across the
+  // face. The number showing is the health bar, told in rock.
+  const scarCount = Math.min(MOON_SCARS.length,
+    Math.floor(o.damage * MOON_SCARS.length + (o.dying ? MOON_SCARS.length : 0)));
+  for (let i = 0; i < scarCount; i++) {
+    const scar = MOON_SCARS[i];
+    const sx = scar.x * R;
+    const sy = scar.y * R;
+    const sr = scar.r * R;
+    g.strokeStyle = "rgba(252, 250, 244, 0.3)";
+    g.lineWidth = 2;
+    g.beginPath();
+    for (let n = 0; n < 7; n++) {
+      const a = scar.seed + (n / 7) * Math.PI * 2;
+      const len = sr * (2.4 + ((n * 7 + i * 3) % 5) * 0.5);
+      g.moveTo(sx + Math.cos(a) * sr * 0.9, sy + Math.sin(a) * sr * 0.9);
+      g.lineTo(sx + Math.cos(a) * len, sy + Math.sin(a) * len);
+    }
+    g.stroke();
+    g.fillStyle = "rgba(250, 248, 242, 0.22)";
+    g.beginPath(); g.arc(sx, sy, sr * 1.25, 0, Math.PI * 2); g.fill();
+    g.fillStyle = "rgba(26, 25, 24, 0.72)";
+    g.beginPath(); g.arc(sx, sy, sr, 0, Math.PI * 2); g.fill();
+    g.fillStyle = "rgba(255, 255, 255, 0.22)";
+    g.beginPath(); g.arc(sx - sr * 0.26, sy - sr * 0.3, sr * 0.6, 0, Math.PI * 2); g.fill();
+  }
+
+  // The lit fraction is the phase, so this one shape carries the whole state of
+  // the fight: a crescent to open, half awake, then full and blazing.
+  paintMoonShadow(g, R, o.lit, o.eclipsed ? 0.93 : 0.8);
+
+  // The face goes *over* the shadow and is then dusted with it again at low
+  // alpha, so the dark half subdues it without hiding it — and the eyes, which
+  // glow, cut straight through. A crescent Moon staring out of its own shadow
+  // is the whole character of the fight.
+  paintMoonFace(g, o);
+  paintMoonShadow(g, R, o.lit, o.eclipsed ? 0.5 : 0.28);
+
+  g.restore();
+
+  // rim light along the lit limb — crisp, because there is no air to soften it
+  g.strokeStyle = o.eclipsed ? "rgba(255, 250, 235, 0.95)" : "rgba(244, 248, 255, 0.5)";
+  g.lineWidth = o.eclipsed ? 3 : 2;
+  g.beginPath(); g.arc(0, 0, R - 1, Math.PI * 0.86, Math.PI * 1.78); g.stroke();
+}
+
+// The shadowed part of a lunar phase: the far limb, closed off by a half
+// ellipse whose width is how far past half-lit we are. `lit` 0 is new, 0.5 is
+// exactly half, 1 is full. Must be called inside the body's clip.
+function paintMoonShadow(g, R, lit, alpha) {
+  const k = 1 - 2 * Math.max(0, Math.min(1, lit));
+  if (k <= -0.995) return;                       // full: nothing to darken
+  g.save();
+  g.fillStyle = `rgba(6, 8, 14, ${alpha})`;
+  g.beginPath();
+  g.arc(0, 0, R, -Math.PI / 2, Math.PI / 2, false);
+  // Past half-lit the terminator bows away from the dark side and the shadow
+  // shrinks; before it, it bows across the face and the shadow grows.
+  g.ellipse(0, 0, Math.abs(k) * R, R, 0, Math.PI / 2, -Math.PI / 2, k < 0);
+  g.closePath();
+  g.fill();
+  g.restore();
+}
+
+// Its face. Brows, tracking pupils, a mouth that gapes on the shot — painted
+// cold: this is a body with no fire in it, so the only colour it owns is
+// reflected sunlight.
+function paintMoonFace(g, o) {
+  const t = o.t;
+  const angry = 0.35 + o.damage * 0.45 + o.charge * 0.55;
+  const eyeGlow = o.eclipsed ? "#fff6d8" : o.charge > 0.05 ? "#9fd4ff" : o.hit > 0 ? "#fff3b0" : "#bfe4ff";
+  const eyeRadius = (9 + o.charge * 4 + o.shoot * 2.5) * (o.hit > 0 ? 0.7 : 1);
+
+  g.fillStyle = "#15161a";
+  BROW_SIDES.forEach((side) => {
+    g.save();
+    g.translate(side * 27, -20);
+    g.rotate(side * angry * 0.55 + Math.sin(t * .003 + side) * .035);
+    g.beginPath();
+    g.moveTo(-23, -9); g.lineTo(20, -19); g.lineTo(22, -7); g.lineTo(-22, 4);
+    g.closePath(); g.fill();
+    g.restore();
+  });
+
+  if (o.dying) {
+    g.strokeStyle = "#1b1c22"; g.lineWidth = 6; g.lineCap = "round";
+    for (const side of BROW_SIDES) {
+      g.beginPath();
+      g.moveTo(side * 27 - 8, -22); g.lineTo(side * 27 + 8, -6);
+      g.moveTo(side * 27 + 8, -22); g.lineTo(side * 27 - 8, -6);
+      g.stroke();
+    }
+  } else if (o.shut) {
+    g.strokeStyle = o.hit > 0.05 ? eyeGlow : "#15161a";
+    g.lineWidth = 6;
+    g.lineCap = "round";
+    BROW_SIDES.forEach((side) => {
+      g.beginPath();
+      g.moveTo(side * 27 - 10, -15);
+      g.lineTo(side * 27, -10 - o.hit * 5);
+      g.lineTo(side * 27 + 10, -15);
+      g.stroke();
+    });
+  } else {
+    const eyeGlowRadius = Math.round(16 + o.charge * 18 + (o.eclipsed ? 14 : 0));
+    o.glow(eyeGlow, eyeGlowRadius, -27, -14);
+    o.glow(eyeGlow, eyeGlowRadius, 27, -14);
+    g.fillStyle = "#f4f2ec";
+    g.beginPath();
+    g.arc(-27, -14, eyeRadius, 0, Math.PI * 2);
+    g.arc(27, -14, eyeRadius, 0, Math.PI * 2);
+    g.fill();
+    g.fillStyle = eyeGlow;
+    g.beginPath();
+    g.arc(-27 + o.lookX, -14 + o.lookY, eyeRadius * 0.6, 0, Math.PI * 2);
+    g.arc(27 + o.lookX, -14 + o.lookY, eyeRadius * 0.6, 0, Math.PI * 2);
+    g.fill();
+    g.fillStyle = "#0b1018";
+    g.beginPath();
+    g.arc(-27 + o.lookX, -14 + o.lookY, eyeRadius * 0.27, 0, Math.PI * 2);
+    g.arc(27 + o.lookX, -14 + o.lookY, eyeRadius * 0.27, 0, Math.PI * 2);
+    g.fill();
+    g.fillStyle = "rgba(255,255,255,0.9)";
+    g.beginPath();
+    g.arc(-31 + o.lookX, -18 + o.lookY, eyeRadius * 0.22, 0, Math.PI * 2);
+    g.arc(23 + o.lookX, -18 + o.lookY, eyeRadius * 0.22, 0, Math.PI * 2);
+    g.fill();
+  }
+
+  // mouth: a crater of a thing, gaping when it throws
+  const mouthY = 44;
+  if (o.dying) {
+    g.fillStyle = "#15161a";
+    g.beginPath(); g.ellipse(0, mouthY, 20, 15, 0, 0, Math.PI * 2); g.fill();
+  } else if (o.shoot > 0.05 || o.charge > 0.3) {
+    const open = 8 + o.shoot * 17 + o.charge * 8;
+    const wide = 22 - o.charge * 8;
+    g.fillStyle = "#101116";
+    g.beginPath(); g.ellipse(0, mouthY, wide, open, 0, 0, Math.PI * 2); g.fill();
+    g.fillStyle = "rgba(190, 220, 255, 0.22)";
+    g.beginPath(); g.ellipse(0, mouthY + open * 0.28, wide * 0.62, open * 0.4, 0, 0, Math.PI * 2); g.fill();
+  } else {
+    g.strokeStyle = "#15161a";
+    g.lineWidth = 6;
+    g.lineCap = "round";
+    g.beginPath();
+    g.arc(0, 44, 28, Math.PI + 0.32, Math.PI * 2 - 0.32);
+    g.stroke();
+  }
+}
+
+function drawMoon(t) {
   const deathProgress = bossDying ? 1 - Math.max(0, bossDeathTimer) / BOSS_DEATH_FRAMES : 0;
-  // the planet is gone once the big blast lands
+  // the body is gone once the big blast lands
   if (deathProgress > 0.74) return;
 
   let shakeX = 0;
@@ -3650,38 +4582,49 @@ function drawMercury(t) {
   const shoot = bossShootAnim > 0 ? bossShootAnim / BOSS_SHOOT_FRAMES : 0;   // 1 -> 0
   const hit = bossHitFlash > 0 ? bossHitFlash / BOSS_HIT_FRAMES : 0;         // 1 -> 0
   const charge = bossChargeAnim > 0 ? 1 - bossChargeAnim / BOSS_CHARGE_FRAMES : 0; // 0 -> 1
-  const damage = 1 - Math.max(0, boss.health) / BOSS_MAX_HEALTH;
+  const damage = 1 - Math.max(0, boss.health) / MOON_MAX_HEALTH;
+  const eclipsed = moonEclipse > 0;
+
+  // The phase is the fight. `moonLit` eases toward the third of the health bar
+  // it is currently in, so the terminator visibly retreats over about a second
+  // when it steps up rather than snapping.
+  const litTarget = bossDying ? 1 : MOON_PHASE_LIGHT[bossPhase - 1];
+  moonLit += (litTarget - moonLit) * 0.035;
 
   const bob = Math.sin(t * 0.0016) * 7;
   const cx = boss.x + shakeX;
   const cy = boss.y + bob + shakeY;
-  const R = BOSS_RADIUS;
+  const R = MOON_RADIUS;
 
   // squash/stretch: inhale on the wind-up, snap outward on the shot
   const squashX = 1 + shoot * 0.13 - charge * 0.09 - hit * 0.05;
   const squashY = 1 - shoot * 0.11 + charge * 0.11 + hit * 0.05;
   const scale = (1 + deathProgress * 0.12) * (1 - hit * 0.03);
-  // hold full opacity while it cracks apart, then blow out over ~10 frames
   const fadeStart = 0.68;
   const alpha = bossDying && deathProgress > fadeStart
     ? Math.max(0, 1 - (deathProgress - fadeStart) / 0.06)
     : 1;
 
-  bossSpin += 0.0016 + charge * 0.01;
+  // Tidally locked: it never turns away, so the crater field does not rotate.
+  // What it does instead is librate — the real Moon's slow nod, which is the
+  // only reason we have ever seen a sliver past the edge.
+  moonLibration += 0.0021;
 
   ctx.save();
   ctx.globalAlpha = alpha;
 
-  // Corona — reddens and swells while charging a shot. Built around the origin
-  // and translated into place so the same gradient survives the shake/bob jitter,
-  // and rebuilt only when its radius or colour actually changes.
-  const auraRadius = R * (1.28 + charge * 0.22 + shoot * 0.3);
-  const auraColor = charge > 0.05
-    ? `rgba(255, ${Math.round(120 - charge * 70)}, 90, ${(0.16 + charge * 0.3).toFixed(2)})`
-    : "rgba(190, 150, 255, 0.16)";
+  // --- halo ----------------------------------------------------------------
+  // No atmosphere, so there is nothing to glow: what little there is comes from
+  // sunlight scraping the limb, and it goes cold and hard while it winds up.
+  const auraRadius = R * (1.2 + charge * 0.24 + shoot * 0.28 + (eclipsed ? 0.5 : 0));
+  const auraColor = eclipsed
+    ? "rgba(255, 250, 235, 0.42)"
+    : charge > 0.05
+      ? `rgba(${Math.round(200 + charge * 55)}, ${Math.round(226 + charge * 26)}, 255, ${(0.16 + charge * 0.26).toFixed(2)})`
+      : "rgba(186, 214, 255, 0.14)";
   ctx.translate(cx, cy);
   if (!auraGradient || auraGradientRadius !== auraRadius || auraGradientColor !== auraColor) {
-    auraGradient = ctx.createRadialGradient(0, 0, R * 0.75, 0, 0, auraRadius);
+    auraGradient = ctx.createRadialGradient(0, 0, R * 0.78, 0, 0, auraRadius);
     auraGradient.addColorStop(0, auraColor);
     auraGradient.addColorStop(1, "rgba(0, 0, 0, 0)");
     auraGradientRadius = auraRadius;
@@ -3690,121 +4633,50 @@ function drawMercury(t) {
   ctx.fillStyle = auraGradient;
   ctx.beginPath(); ctx.arc(0, 0, auraRadius, 0, Math.PI * 2); ctx.fill();
 
-  // leans toward the player, harder while winding up a shot
+  // The gravity well, and — the important half — the ring the slam will clear.
+  // It is drawn for the whole pull and tightens as the clock runs down, so
+  // being caught by the slam is always something you could see coming.
+  if (moonPull > 0) {
+    for (let ring = 0; ring < 3; ring++) {
+      const phase = ((t * 0.0011 + ring / 3) % 1);
+      ctx.strokeStyle = `rgba(180, 214, 255, ${(0.34 * (1 - phase)).toFixed(3)})`;
+      ctx.lineWidth = 2 + (1 - phase) * 2;
+      ctx.beginPath(); ctx.arc(0, 0, R * (1.15 + phase * 3.2), 0, Math.PI * 2); ctx.stroke();
+    }
+    const imminent = moonPull < 55;
+    const beat = imminent ? (moonPull % 10 < 5 ? 1 : 0.45) : 0.72;
+    ctx.save();
+    ctx.setLineDash([14, 11]);
+    ctx.lineDashOffset = -t * 0.045;
+    ctx.strokeStyle = imminent
+      ? `rgba(255, 226, 150, ${beat.toFixed(2)})`
+      : `rgba(206, 228, 255, ${beat.toFixed(2)})`;
+    ctx.lineWidth = imminent ? 5 : 3;
+    ctx.beginPath(); ctx.arc(0, 0, MOON_SLAM_R, 0, Math.PI * 2); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.globalAlpha = imminent ? 0.14 : 0.07;
+    ctx.fillStyle = imminent ? "#ffd98a" : "#9fc4ff";
+    ctx.beginPath(); ctx.arc(0, 0, MOON_SLAM_R, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  }
+
+  // leans toward the player, harder while winding up
   const lean = Math.max(-1, Math.min(1, (player.x - boss.x) / (W * 0.4)));
-  ctx.rotate(lean * (0.05 + charge * 0.09));
+  ctx.rotate(lean * (0.05 + charge * 0.09) + Math.sin(moonLibration) * 0.03);
   ctx.scale(scale * squashX, scale * squashY);
 
-  // --- debris that has been knocked off, behind the planet ----------------
+  // --- debris that has been knocked off, behind the body -------------------
   for (const shard of bossShards) {
     shard.angle += shard.speed;
     shard.spin += shard.spinSpeed;
   }
   drawBossShards(false);
 
-  // --- body ---------------------------------------------------------------
-  // The body and terminator gradients are in the planet's own coordinate space,
-  // so they never change; building them once beats rebuilding two per frame.
-  if (!bodyGradient) {
-    bodyGradient = ctx.createRadialGradient(-R * 0.34, -R * 0.38, R * 0.12, 0, 0, R);
-    bodyGradient.addColorStop(0, "#f2efe9");
-    bodyGradient.addColorStop(0.42, "#b8b4ad");
-    bodyGradient.addColorStop(0.78, "#78746f");
-    bodyGradient.addColorStop(1, "#2e2c2b");
-    shadeGradient = ctx.createLinearGradient(R * 0.1, -R, R, R);
-    shadeGradient.addColorStop(0, "rgba(0, 0, 0, 0)");
-    shadeGradient.addColorStop(1, "rgba(0, 0, 0, 0.6)");
-  }
-  ctx.fillStyle = bodyGradient;
-  ctx.beginPath(); ctx.arc(0, 0, R, 0, Math.PI * 2); ctx.fill();
-
-  // Craters, terminator and cracks all clip to the same disc. Clipping is one of
-  // the priciest canvas calls, so set it once and draw all three inside it.
-  const crackCount = Math.floor(damage * BOSS_CRACKS.length + (bossDying ? BOSS_CRACKS.length : 0));
-  ctx.save();
-  ctx.beginPath(); ctx.arc(0, 0, R, 0, Math.PI * 2); ctx.clip();
-
-  // craters, slowly rotating
-  ctx.save();
-  ctx.rotate(bossSpin);
-  for (const crater of BOSS_CRATERS) {
-    const x = Math.cos(crater.a) * crater.d * R;
-    const y = Math.sin(crater.a) * crater.d * R;
-    ctx.fillStyle = "rgba(40, 38, 37, 0.32)";
-    ctx.beginPath(); ctx.arc(x, y, crater.r, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = "rgba(255, 255, 255, 0.16)";
-    ctx.beginPath(); ctx.arc(x - crater.r * 0.28, y - crater.r * 0.3, crater.r * 0.62, 0, Math.PI * 2); ctx.fill();
-  }
-  ctx.restore();
-
-  // terminator shadow
-  ctx.fillStyle = shadeGradient;
-  ctx.fillRect(-R, -R, R * 2, R * 2);
-
-  // --- battle damage: cracks open up as the health bar drains -------------
-  if (crackCount > 0) {
-    // Molten seams: a dark fissure with a hot core and a bloom either side, all
-    // pulsing together, so the planet looks lit from inside rather than drawn on.
-    const pulse = bossDying ? 1 : 0.55 + Math.sin(t * 0.006) * 0.25;
-    const shown = Math.min(crackCount, BOSS_CRACKS.length);
-    for (let pass = 0; pass < 3; pass++) {
-      ctx.lineCap = "round";
-      ctx.lineJoin = "round";
-      if (pass === 0) {
-        ctx.strokeStyle = `rgba(255, 90, 20, ${(0.2 * pulse).toFixed(3)})`;
-        ctx.lineWidth = (bossDying ? 18 : 10) * pulse;
-      } else if (pass === 1) {
-        ctx.strokeStyle = `rgba(255, ${bossDying ? 210 : 160}, 70, ${(0.85 * pulse).toFixed(3)})`;
-        ctx.lineWidth = bossDying ? 7 : 4;
-      } else {
-        ctx.strokeStyle = "rgba(255, 250, 225, 0.9)";
-        ctx.lineWidth = bossDying ? 2.6 : 1.5;
-      }
-      for (let i = 0; i < shown; i++) {
-        const path = BOSS_CRACKS[i];
-        ctx.beginPath();
-        for (let n = 0; n < path.length; n++) {
-          const x = path[n][0] * R;
-          const y = path[n][1] * R;
-          if (n === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-        }
-        ctx.stroke();
-        // branches, so the fissures fork instead of running as single lines
-        if (pass === 1 && path.length > 2) {
-          const mid = path[1];
-          ctx.beginPath();
-          ctx.moveTo(mid[0] * R, mid[1] * R);
-          ctx.lineTo(mid[0] * R + (i % 2 ? 26 : -26), mid[1] * R + 20);
-          ctx.stroke();
-        }
-      }
-    }
-  }
-  ctx.restore();
-
-  // rim light
-  ctx.strokeStyle = "rgba(255, 246, 220, 0.35)";
-  ctx.lineWidth = 2;
-  ctx.beginPath(); ctx.arc(0, 0, R - 1, Math.PI * 0.9, Math.PI * 1.75); ctx.stroke();
-
-  // --- face ---------------------------------------------------------------
-  const angry = 0.35 + damage * .45 + charge * 0.55;
-  const eyeGlow = charge > 0.05 ? "#ff5a3c" : hit > 0 ? "#fff3b0" : "#ff4f91";
-  const eyeRadius = (9 + charge * 4 + shoot * 2.5) * (hit > 0 ? 0.7 : 1);
-
-  ctx.fillStyle = "#171717";
-  BROW_SIDES.forEach((side) => {
-    ctx.save();
-    ctx.translate(side * 27, -20);
-    ctx.rotate(side * angry * 0.55 + Math.sin(t * .003 + side) * .035);
-    ctx.beginPath();
-    ctx.moveTo(-23, -9); ctx.lineTo(20, -19); ctx.lineTo(22, -7); ctx.lineTo(-22, 4);
-    ctx.closePath(); ctx.fill();
-    ctx.restore();
-  });
-
-  // blink on its own clock — the cheapest trick there is for making a face
-  // look like something is behind it
+  // --- body ----------------------------------------------------------------
+  // Shared with the menu badge; see `paintMoonBody`.
+  const toPlayer = Math.atan2(player.y - boss.y, player.x - boss.x);
+  const look = Math.min(1, Math.hypot(player.x - boss.x, player.y - boss.y) / 260);
+  const eyeR = (9 + charge * 4 + shoot * 2.5) * (hit > 0 ? 0.7 : 1);
   if (!bossDying) {
     if (bossBlink > 0) bossBlink--;
     else if (--bossBlinkTimer <= 0) {
@@ -3812,127 +4684,16 @@ function drawMercury(t) {
       bossBlinkTimer = 170 + Math.floor(Math.random() * 240);
     }
   }
-  const shut = hit > 0.05 || bossBlink > 0;
+  paintMoonBody(ctx, {
+    t, lit: moonLit, damage, charge, shoot, hit,
+    eclipsed, dying: bossDying,
+    shut: hit > 0.05 || bossBlink > 0,
+    lookX: Math.cos(toPlayer) * eyeR * 0.36 * look,
+    lookY: Math.sin(toPlayer) * eyeR * 0.36 * look,
+    glow: drawGlow,
+  });
 
-  if (bossDying) {
-    ctx.strokeStyle = "#21151d"; ctx.lineWidth = 6; ctx.lineCap = "round";
-    for (const side of BROW_SIDES) {
-      ctx.beginPath();
-      ctx.moveTo(side * 27 - 8, -22); ctx.lineTo(side * 27 + 8, -6);
-      ctx.moveTo(side * 27 + 8, -22); ctx.lineTo(side * 27 - 8, -6);
-      ctx.stroke();
-    }
-  } else if (shut) {
-    ctx.strokeStyle = hit > 0.05 ? eyeGlow : "#171717";
-    ctx.lineWidth = 6;
-    ctx.lineCap = "round";
-    BROW_SIDES.forEach((side) => {
-      ctx.beginPath();
-      ctx.moveTo(side * 27 - 10, -15);
-      ctx.lineTo(side * 27, -10 - hit * 5);
-      ctx.lineTo(side * 27 + 10, -15);
-      ctx.stroke();
-    });
-  } else {
-    // pupils track the ship
-    const toPlayer = Math.atan2(player.y - boss.y, player.x - boss.x);
-    const look = Math.min(1, Math.hypot(player.x - boss.x, player.y - boss.y) / 260);
-    const lookX = Math.cos(toPlayer) * eyeRadius * 0.36 * look;
-    const lookY = Math.sin(toPlayer) * eyeRadius * 0.36 * look;
-    const eyeGlowRadius = Math.round(16 + charge * 18);
-    drawGlow(eyeGlow, eyeGlowRadius, -27, -14);
-    drawGlow(eyeGlow, eyeGlowRadius, 27, -14);
-    ctx.fillStyle = "#f6f1ea";
-    ctx.beginPath();
-    ctx.arc(-27, -14, eyeRadius, 0, Math.PI * 2);
-    ctx.arc(27, -14, eyeRadius, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = eyeGlow;
-    ctx.beginPath();
-    ctx.arc(-27 + lookX, -14 + lookY, eyeRadius * 0.6, 0, Math.PI * 2);
-    ctx.arc(27 + lookX, -14 + lookY, eyeRadius * 0.6, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = "#170606";
-    ctx.beginPath();
-    ctx.arc(-27 + lookX, -14 + lookY, eyeRadius * 0.27, 0, Math.PI * 2);
-    ctx.arc(27 + lookX, -14 + lookY, eyeRadius * 0.27, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = "rgba(255,255,255,0.9)";
-    ctx.beginPath();
-    ctx.arc(-31 + lookX, -18 + lookY, eyeRadius * 0.22, 0, Math.PI * 2);
-    ctx.arc(23 + lookX, -18 + lookY, eyeRadius * 0.22, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  // Mouth has three explicit poses: a clean frown, clenched charge-up, then a
-  // dark open mouth with upper/lower teeth and a muzzle flash at shot release.
-  const mouthY = 35 + Math.sin(t * .0025) * 1.4;
-  if (bossDying) {
-    ctx.fillStyle = "#21151d";
-    ctx.beginPath(); ctx.ellipse(0, mouthY, 16, 19, 0, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = "#bd7085";
-    ctx.beginPath(); ctx.ellipse(4, mouthY + 14, 8, 13, -.12, 0, Math.PI * 2); ctx.fill();
-  } else if (hit > .08) {
-    ctx.strokeStyle = "#21151d"; ctx.lineWidth = 5; ctx.lineCap = "round";
-    ctx.beginPath(); ctx.moveTo(-19, mouthY + 3); ctx.quadraticCurveTo(-4, mouthY - 12, 18, mouthY); ctx.stroke();
-  } else if (shoot > 0.04) {
-    const mouthOpen = 9 + shoot * 14;
-    ctx.save();
-    ctx.beginPath(); ctx.ellipse(0, mouthY, 20 + shoot * 6, mouthOpen, 0, 0, Math.PI * 2); ctx.clip();
-    ctx.fillStyle = "#16080a";
-    ctx.beginPath();
-    ctx.ellipse(0, mouthY, 20 + shoot * 6, mouthOpen, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.globalAlpha = 0.28 + shoot * 0.48;
-    ctx.fillStyle = "#ff6a2c";
-    ctx.beginPath();
-    ctx.ellipse(0, mouthY + mouthOpen * 0.28, 10 + shoot * 4, 5 + shoot * 4, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.globalAlpha = 1;
-    ctx.fillStyle = "#f4ead8";
-    const top = mouthY - mouthOpen * 0.78;
-    const bottom = mouthY + mouthOpen * 0.78;
-    const tooth = Math.min(7, mouthOpen * 0.34);
-    for (let i = -2; i <= 2; i++) {
-      const x = i * 8;
-      ctx.beginPath();
-      ctx.moveTo(x - 3.3, top); ctx.lineTo(x + 3.3, top); ctx.lineTo(x, top + tooth);
-      ctx.closePath(); ctx.fill();
-      ctx.beginPath();
-      ctx.moveTo(x - 3.3, bottom); ctx.lineTo(x + 3.3, bottom); ctx.lineTo(x, bottom - tooth);
-      ctx.closePath(); ctx.fill();
-    }
-    if (shoot > 0.62) {
-      drawGlow("#ff8a32", 18, 0, mouthY + mouthOpen * 0.45);
-      ctx.fillStyle = "#fff2c9";
-      ctx.beginPath(); ctx.arc(0, mouthY + mouthOpen * 0.45, 4 + shoot * 2, 0, Math.PI * 2); ctx.fill();
-    }
-    ctx.restore();
-  } else if (charge > 0.05) {
-    const clench = 5 + charge * 2;
-    ctx.save();
-    ctx.beginPath(); ctx.ellipse(0, mouthY, 23, clench + 2, 0, 0, Math.PI * 2); ctx.clip();
-    ctx.fillStyle = "#171719";
-    ctx.beginPath(); ctx.ellipse(0, mouthY, 23, clench + 2, 0, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = "#f2eee5";
-    ctx.fillRect(-20, mouthY - clench, 40, clench * 2);
-    ctx.strokeStyle = "#77736d";
-    ctx.lineWidth = 1.5;
-    for (let x = -12; x <= 12; x += 8) {
-      ctx.beginPath(); ctx.moveTo(x, mouthY - clench); ctx.lineTo(x, mouthY + clench); ctx.stroke();
-    }
-    ctx.beginPath(); ctx.moveTo(-20, mouthY); ctx.lineTo(20, mouthY); ctx.stroke();
-    ctx.restore();
-  } else {
-    ctx.strokeStyle = "#171717";
-    ctx.lineWidth = 6;
-    ctx.lineCap = "round";
-    ctx.beginPath();
-    ctx.arc(0, 44, 28, Math.PI + 0.32, Math.PI * 2 - 0.32);
-    ctx.stroke();
-  }
-
-  // --- hit flash overlay --------------------------------------------------
+  // --- hit flash -----------------------------------------------------------
   if (hit > 0) {
     ctx.globalCompositeOperation = "lighter";
     ctx.fillStyle = `rgba(255, 255, 255, ${hit * 0.5})`;
@@ -3940,13 +4701,39 @@ function drawMercury(t) {
     ctx.globalCompositeOperation = "source-over";
   }
 
-  // --- debris passing in front -------------------------------------------
+  // --- debris passing in front ---------------------------------------------
   drawBossShards(true);
 
   ctx.restore();
 
   if (bossHitFlash > 0) bossHitFlash--;
   if (bossShootAnim > 0) bossShootAnim--;
+}
+
+
+
+// The eclipse veil. Painted in screen space after the body, so the bullets and
+// the ship still draw on top of it and stay readable — losing sight of the
+// Moon's wind-up is the attack; losing sight of what is already in the air
+// would just be unfair.
+function drawEclipseVeil(t) {
+  if (moonEclipse <= 0) return;
+  const ramp = Math.min(1, Math.min(moonEclipse, 40) / 40);   // fades in and out
+  ctx.save();
+  ctx.fillStyle = `rgba(2, 3, 7, ${(0.82 * ramp).toFixed(3)})`;
+  ctx.fillRect(0, 0, W, H);
+  // the corona: the one thing you can still see
+  const R = MOON_RADIUS;
+  const flare = 1 + Math.sin(t * 0.008) * 0.04;
+  const g = ctx.createRadialGradient(boss.x, boss.y, R * 0.98, boss.x, boss.y, R * 2.5 * flare);
+  g.addColorStop(0, `rgba(255, 250, 232, ${(0.55 * ramp).toFixed(3)})`);
+  g.addColorStop(0.16, `rgba(255, 240, 200, ${(0.22 * ramp).toFixed(3)})`);
+  g.addColorStop(1, "rgba(255, 230, 180, 0)");
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.arc(boss.x, boss.y, R * 2.5 * flare, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = `rgba(3, 4, 9, ${(0.9 * ramp).toFixed(3)})`;
+  ctx.beginPath(); ctx.arc(boss.x, boss.y, R * 0.99, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
 }
 
 // ---------------------------------------------------------------------------
@@ -3970,6 +4757,17 @@ const VENUS_BANDS = [
   { y: 0.46,  h: 0.17, tone: "#c78a3e", alpha: 0.5, drift: 1.0 },
   { y: 0.72,  h: 0.13, tone: "#a96a2c", alpha: 0.52, drift: -1.3 },
 ];
+// Fissure seeds in unit space, opened progressively as Venus loses health.
+// These used to be Mercury's table, borrowed; molten rock is Venus's idea, so
+// they live here now.
+const VENUS_CRACKS = [
+  [[-0.97, -0.05], [-0.78, -0.26], [-0.66, -0.55], [-0.42, -0.72]],
+  [[-0.9, 0.28], [-0.66, 0.46], [-0.38, 0.68], [-0.06, 0.84]],
+  [[0.95, -0.14], [0.76, -0.34], [0.64, -0.6], [0.4, -0.78]],
+  [[0.9, 0.26], [0.66, 0.47], [0.42, 0.7], [0.12, 0.86]],
+  [[-0.3, 0.9], [-0.02, 0.74], [0.26, 0.88], [0.5, 0.7]],
+];
+
 let venusBodyGradient = null;
 let venusShadeGradient = null;
 let venusAuraGradient = null;
@@ -4016,6 +4814,9 @@ function drawVenus(t) {
     shakeY = rand(-power, power);
     bossShakeTimer--;
   }
+  // Mercury decays the shared hit flash in its own draw; Venus has to decay it
+  // here too, or one hit whites the planet out for the rest of the fight.
+  if (bossHitFlash > 0) bossHitFlash--;
 
   const shoot = bossShootAnim > 0 ? bossShootAnim / BOSS_SHOOT_FRAMES : 0;
   const hit = bossHitFlash > 0 ? bossHitFlash / BOSS_HIT_FRAMES : 0;
@@ -4145,7 +4946,7 @@ function drawVenus(t) {
   ctx.restore();
 
   // Molten fissures opening through the deck as it loses health.
-  const crackCount = Math.floor(damage * BOSS_CRACKS.length + (bossDying ? BOSS_CRACKS.length : 0));
+  const crackCount = Math.floor(damage * VENUS_CRACKS.length + (bossDying ? VENUS_CRACKS.length : 0));
   if (crackCount > 0) {
     ctx.save();
     ctx.rotate(venusSpin);
@@ -4156,8 +4957,8 @@ function drawVenus(t) {
         ? `rgba(255, 90, 20, ${(0.4 * pulse).toFixed(3)})`
         : pass === 1 ? `rgba(255, 176, 60, ${Math.min(1, 0.9 * pulse).toFixed(3)})` : "#fff6d8";
       ctx.lineWidth = pass === 0 ? 13 : pass === 1 ? 6 : 2;
-      for (let i = 0; i < Math.min(crackCount, BOSS_CRACKS.length); i++) {
-        const seed = BOSS_CRACKS[i];
+      for (let i = 0; i < Math.min(crackCount, VENUS_CRACKS.length); i++) {
+        const seed = VENUS_CRACKS[i];
         ctx.beginPath();
         ctx.moveTo(seed[0][0] * R, seed[0][1] * R);
         for (let k = 1; k < seed.length; k++) ctx.lineTo(seed[k][0] * R, seed[k][1] * R);
@@ -4274,7 +5075,7 @@ let venusTelegraphAt = 0;
 // Hard ceiling on orbs in flight. Chaining two patterns in phase 3 could stack
 // well past two hundred, which stops being difficulty and starts being a wall —
 // and it is the only thing in this fight that can grow without bound.
-const VENUS_ORB_CAP = 130;
+const VENUS_ORB_CAP = 150;
 
 function pushVenusOrb(angle, speed, radius = 8) {
   if (bossBullets.length >= VENUS_ORB_CAP) return;
@@ -4300,10 +5101,13 @@ function queueVenusShot(delay, fn) {
 // that land on top of you. Nothing is ever guaranteed: this weights the roll,
 // it does not replace it.
 function pickVenusAttack() {
-  // dive and storm are the two that most want breathing room, so they are never
-  // the immediate follow-up inside a chain
+  // dive is the one pattern that always wants breathing room, so it never
+  // follows inside a phase-1 chain; from phase 2 the planet commits to it
+  // mid-chain too, and in the final phase even the storm gets no breather
   const pool = venusChain > 0
-    ? VENUS_ATTACKS.filter((a) => a !== "dive" && a !== "storm" && a !== venusLastAttack)
+    ? VENUS_ATTACKS.filter((a) => a !== venusLastAttack
+      && (bossPhase >= 2 || a !== "dive")
+      && (bossPhase >= 3 || a !== "storm"))
     : VENUS_ATTACKS.filter((a) => a !== venusLastAttack);
   const hugging = player.x < W * 0.2 || player.x > W * 0.8;
   const still = Math.hypot(player.vx, player.vy) < 1.3;
@@ -4343,21 +5147,21 @@ function startVenusAttack() {
     // cannot be pre-walked.
     const columns = Math.max(6, Math.floor(W / 108));
     const step = W / columns;
-    const sheets = brutal ? 5 : hard ? 4 : 3;
+    const sheets = brutal ? 6 : hard ? 5 : 4;
     let dir = Math.random() < 0.5 ? 1 : -1;
     let gapLane = Math.floor(Math.random() * columns);
-    const speed = brutal ? 4.3 : hard ? 3.9 : 3.4;
+    const speed = brutal ? 5 : hard ? 4.4 : 3.8;
     for (let sheet = 0; sheet < sheets; sheet++) {
       const lane0 = gapLane;
       for (let lane = 0; lane < columns; lane++) {
         if (lane === lane0 || lane === (lane0 + 1) % columns) continue;
         const x = step * (lane + 0.5);
-        queueVenusShot(1 + sheet * (brutal ? 28 : 34) + lane * 2, () => fireVenusShot(x, -20, Math.PI / 2, speed, "venus-dart"));
+        queueVenusShot(1 + sheet * (brutal ? 24 : 30) + lane * 2, () => fireVenusShot(x, -20, Math.PI / 2, speed, "venus-dart"));
       }
       if (Math.random() < 0.3) dir = -dir;      // the gap can double back
       gapLane = ((gapLane + dir) % columns + columns) % columns;
     }
-    venusAttackTimer = sheets * (brutal ? 28 : 34) + 70;
+    venusAttackTimer = sheets * (brutal ? 24 : 30) + 70;
     playSound(320, 0.5, "sawtooth");
     return;
   }
@@ -4365,21 +5169,21 @@ function startVenusAttack() {
   if (venusAttack === "spiral") {
     // Retrograde spiral winding backwards, matching the planet's own rotation.
     // It reverses direction partway through in the later phases.
-    const ticks = brutal ? 28 : hard ? 24 : 20;
+    const ticks = brutal ? 34 : hard ? 30 : 26;
     const arms = brutal ? 3 : hard ? 3 : 2;
     const flipAt = brutal ? Math.floor(ticks * 0.55) : -1;
     let dir = -1;
     for (let i = 0; i < ticks; i++) {
       const flip = i === flipAt;
-      queueVenusShot(1 + i * 5, () => {
+      queueVenusShot(1 + i * 4, () => {
         if (flip) { dir = 1; playSound(240, 0.14, "triangle"); }
         for (let arm = 0; arm < arms; arm++) {
-          pushVenusOrb(venusRotation + arm * (Math.PI * 2 / arms), 3.1, 7);
+          pushVenusOrb(venusRotation + arm * (Math.PI * 2 / arms), brutal ? 3.9 : hard ? 3.7 : 3.5, 7);
         }
         venusRotation += dir * 0.22;
       });
     }
-    venusAttackTimer = ticks * 5 + 34;
+    venusAttackTimer = ticks * 4 + 30;
     playSound(150, 0.4, "triangle");
     return;
   }
@@ -4387,17 +5191,17 @@ function startVenusAttack() {
   if (venusAttack === "storm") {
     // Cloud-deck lightning. The warning is shorter each phase, and the last two
     // columns lead the ship rather than marking where it already is.
-    const count = brutal ? 6 : hard ? 4 : 3;
-    const warn = brutal ? 30 : hard ? 38 : VENUS_BOLT_WARN;
+    const count = brutal ? 7 : hard ? 5 : 4;
+    const warn = brutal ? 24 : hard ? 32 : VENUS_BOLT_WARN;
     for (let i = 0; i < count; i++) {
       const lead = i >= count - 2;
-      queueVenusShot(1 + i * (brutal ? 15 : 22), () => {
+      queueVenusShot(1 + i * (brutal ? 12 : 18), () => {
         const x = lead ? player.x + player.vx * (warn * 0.55) : rand(70, W - 70);
         venusBolts.push({ x: Math.max(30, Math.min(W - 30, x)), warn, strike: 0 });
         playSound(700 + i * 90, 0.08, "square");
       });
     }
-    venusAttackTimer = count * (brutal ? 15 : 22) + warn + VENUS_BOLT_STRIKE + 24;
+    venusAttackTimer = count * (brutal ? 12 : 18) + warn + VENUS_BOLT_STRIKE + 24;
     return;
   }
 
@@ -4405,7 +5209,7 @@ function startVenusAttack() {
     // A searchlight of heat orbs: a narrow fan that swings across the arena and
     // back. Unlike the ring there is no gap to find — the answer is to be behind
     // the sweep, which means committing to a direction early.
-    const ticks = brutal ? 34 : hard ? 30 : 26;
+    const ticks = brutal ? 40 : hard ? 36 : 32;
     const spread = brutal ? 3 : hard ? 3 : 2;
     const start = Math.atan2(player.y - boss.y, player.x - boss.x) - 0.9;
     const swing = 1.8 / ticks;
@@ -4415,7 +5219,7 @@ function startVenusAttack() {
       queueVenusShot(1 + i * 4, () => {
         if (back) dir = -1;
         for (let k = 0; k < spread; k++) {
-          pushVenusOrb(venusRotation + (k - (spread - 1) / 2) * 0.13, 3.4, 6);
+          pushVenusOrb(venusRotation + (k - (spread - 1) / 2) * 0.13, 3.9, 6);
         }
         venusRotation += dir * swing * 2.4;
       });
@@ -4430,17 +5234,17 @@ function startVenusAttack() {
     // Seeker darts, fired one at a time so they arrive strung out rather than as
     // a wall. They steer for a long window and then commit, which is the one
     // pattern in the fight that follows you into a corner.
-    const count = brutal ? 5 : hard ? 4 : 3;
-    const gap = brutal ? 16 : 22;
+    const count = brutal ? 6 : hard ? 5 : 4;
+    const gap = brutal ? 14 : 20;
     for (let i = 0; i < count; i++) {
       queueVenusShot(1 + i * gap, () => {
         const angle = Math.atan2(aimTargetY() - boss.y, aimTargetX() - boss.x) + rand(-0.55, 0.55);
-        const speed = brutal ? 3.5 : 3.1;
+        const speed = brutal ? 3.9 : hard ? 3.6 : 3.3;
         enemyBullets.push({
           x: boss.x, y: boss.y,
           vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
           speed,
-          turnRate: brutal ? 0.038 : hard ? 0.031 : 0.025,
+          turnRate: brutal ? 0.045 : hard ? 0.037 : 0.03,
           homing: brutal ? 180 : 140,
           kind: "venus-dart",
           age: 0, phase: 0, fuse: 84, armed: 0, turn: 0.05, shards: 4,
@@ -4468,9 +5272,9 @@ function startVenusAttack() {
   // pressure: a greenhouse shockwave ring with one gap, and the gap moves
   // between rings so standing in the first one is not enough.
   const spokes = brutal ? 30 : hard ? 26 : 20;
-  const rings = brutal ? 3 : hard ? 2 : 1;
+  const rings = brutal ? 4 : hard ? 3 : 2;
   for (let ring = 0; ring < rings; ring++) {
-    queueVenusShot(1 + ring * 48, () => {
+    queueVenusShot(1 + ring * 44, () => {
       const gap = ring === 0
         ? Math.atan2(player.y - boss.y, player.x - boss.x) + Math.PI
         : venusRotation + rand(1.9, Math.PI + 1.2);
@@ -4488,7 +5292,7 @@ function startVenusAttack() {
       playSound(110, 0.4, "sawtooth");
     });
   }
-  venusAttackTimer = rings * 48 + 74;
+  venusAttackTimer = rings * 44 + 74;
 }
 
 // The dive is the one attack the planet performs with its body rather than with
@@ -4505,7 +5309,7 @@ function updateVenusDive() {
     return;
   }
   if (venusDive.phase === "fall") {
-    boss.y += (playableBottomY() - 40 - boss.y) * 0.19;
+    boss.y += (playableBottomY() - 40 - boss.y) * 0.23;
     bossChargeAnim = 0;
     if (Math.random() < 0.6) {
       spawnSparks(boss.x + rand(-VENUS_RADIUS, VENUS_RADIUS), boss.y, 1, "#ffb457",
@@ -4514,10 +5318,10 @@ function updateVenusDive() {
     if (boss.y > playableBottomY() - 80 || venusDive.timer <= 0) {
       // slam: two fronts along the floor plus a hard shake
       for (const side of [-1, 1]) {
-        for (let i = 0; i < 6; i++) {
+        for (let i = 0; i < 8; i++) {
           bossBullets.push({
             x: boss.x, y: boss.y + VENUS_RADIUS * 0.5,
-            vx: side * (2.6 + i * 0.55), vy: -0.5 - i * 0.16,
+            vx: side * (2.8 + i * 0.55), vy: -0.5 - i * 0.16,
             r: 9, color: VENUS_ORB_COLOR, core: "#fff0bd",
           });
         }
@@ -4583,7 +5387,7 @@ function updateVenusBolts() {
     for (let y = 0; y < H; y += 42) ctx.lineTo(bolt.x + rand(-9, 9), y + 42);
     ctx.stroke();
     ctx.globalAlpha = 1;
-    if (!adminInvincible && playerInvulnerable === 0 && Math.abs(player.x - bolt.x) < VENUS_BOLT_HALF_WIDTH + (player.shrunk ? 6 : 12)) {
+    if (!devGodMode && playerInvulnerable === 0 && Math.abs(player.x - bolt.x) < VENUS_BOLT_HALF_WIDTH + (player.shrunk ? 6 : 12)) {
       hurtPlayer();
       if (!gameActive) return;
     }
@@ -4640,19 +5444,19 @@ function updateVenusBoss(t) {
     venusAttackTimer = venusRestFrames();
     return;
   }
-  // chain length grows with the phase: none in 1, up to 2 in 2, and the final
-  // phase always chains — it never gives a single-pattern breather again
+  // chain length grows with the phase: none in 1, one or two in 2, and two or
+  // three with no breather in the final phase
   venusChain = bossPhase === 1 ? 0
-    : bossPhase === 2 ? Math.floor(Math.random() * 3)
-    : 1 + Math.floor(Math.random() * 3);
+    : bossPhase === 2 ? 1 + Math.floor(Math.random() * 2)
+    : 2 + Math.floor(Math.random() * 2);
   startVenusAttack();
 }
 
 function venusRestFrames() {
   // The rest shrinks with every pattern it has thrown and with the phase, and
   // the floor drops in the final third so the fight keeps tightening.
-  const floor = bossPhase >= 3 ? 12 : 20;
-  return Math.max(floor, Math.round((78 - venusStep * 3) * phaseRate()));
+  const floor = bossPhase >= 3 ? 8 : 16;
+  return Math.max(floor, Math.round((66 - venusStep * 3) * phaseRate()));
 }
 
 function trackedBossAngle(fromX, fromY, leadFrames) {
@@ -4665,29 +5469,490 @@ function trackedBossAngle(fromX, fromY, leadFrames) {
   return Math.atan2(targetY - fromY, targetX - fromX);
 }
 
-function pushBossOrb(angle, speed) {
+// A boulder off the surface. Bigger and slower than the regolith, and it is
+// lit like everything else out here: reflected sun on one side, nothing on the
+// other.
+function pushMoonBoulder(angle, speed) {
   bossBullets.push({
     x: boss.x,
     y: boss.y + 60,
     vx: Math.cos(angle) * speed,
     vy: Math.sin(angle) * speed,
+    r: 8,
+    color: "#b4b0a8",
+    core: "#f6f3ec",
   });
+}
+
+// ---------------------------------------------------------------------------
+// THE MOON's attacks
+//
+// It has no atmosphere, no weather and no heat of its own, so it fights with
+// the only three things it actually owns: the rock that falls on it, the pull
+// it has on everything nearby, and its shadow.
+//
+//   CRATER FALL  a strike is *called* — a ring on the floor and a rock visibly
+//                falling into it — a second before it lands. Every hit is
+//                therefore the player's to avoid, which is what a first boss
+//                should teach. Phase 3 walks the strikes across the arena.
+//   TIDAL PULL   from phase 2 it drags the ship toward it for three seconds
+//                while the dust streams inward. It does not damage: it takes
+//                away the one thing the player was relying on, position.
+//   REGOLITH     a ring of dust with one gap in it. Readable, and the gap
+//                moves, so the answer is never "sit still".
+//   EJECTA       chips thrown up by its own craters, which home in.
+//   ECLIPSE      phase 3 only. The arena goes dark for four seconds and the
+//                Moon is a black disc in a white corona. Its wind-ups become
+//                unreadable, so the player has to fight on the sound and the
+//                bullets alone.
+// ---------------------------------------------------------------------------
+const MOON_IMPACT_R = 84;
+const MOON_IMPACT_CAP = 10;
+// A slam is only frightening if you can be caught by it, so the pull has to be
+// able to close this distance and the ring has to be drawn the whole time.
+const MOON_SLAM_R = 262;
+
+function callCraterStrike(x, y, delay, radius) {
+  if (moonImpacts.length >= MOON_IMPACT_CAP) return;
+  x = Math.max(40, Math.min(W - 40, x));
+  y = Math.max(90, Math.min(H - 40, y));
+  // Never stack two strikes on the same ground: overlapping rings read as one
+  // marker and turn a spread into a single blob you can side-step.
+  for (const other of moonImpacts) {
+    if (other.t > 0 && Math.hypot(other.x - x, other.y - y) < radius * 1.55) return false;
+  }
+  moonImpacts.push({ x, y, r: radius, t: delay, max: delay, tilt: rand(-0.34, 0.34) });
+  return true;
+}
+
+// One volley. The shape is always the same and always readable: **one round is
+// aimed where the ship is going**, and the rest fan out around it, far enough
+// apart that they deny separate ground instead of clustering into one puddle.
+// Standing still puts the leading strike on your head; running in a straight
+// line puts it in your path. Either way the answer is to turn.
+function callCraterVolley() {
+  const count = bossPhase >= 3 ? 5 : bossPhase >= 2 ? 4 : 3;
+  const delay = bossPhase >= 3 ? 78 : bossPhase >= 2 ? 90 : 100;
+  const radius = MOON_IMPACT_R * (bossPhase >= 3 ? 1.08 : 1);
+  playSound(150, 0.3, "triangle");
+  playSound(70, 0.5, "sine");
+
+  // the leading round
+  const lead = delay * 0.6;
+  callCraterStrike(player.x + player.vx * lead, player.y + player.vy * lead, delay, radius);
+
+  // and the fan: evenly divided around the ship so no two land together, far
+  // enough out that the arena is genuinely carved up rather than crowded
+  const base = rand(0, Math.PI * 2);
+  const near = bossPhase >= 3 ? 165 : 195;
+  const far = bossPhase >= 3 ? 330 : 360;
+  for (let i = 0; i < count - 1; i++) {
+    // If a slot is crowded out, walk it further along the ring rather than
+    // dropping it — a volley that quietly loses half its rounds is why the
+    // first version landed two markers on top of each other and felt thin.
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const a = base + (i / (count - 1)) * Math.PI * 2 + attempt * 0.5 + rand(-0.22, 0.22);
+      const dist = rand(near, far) + attempt * 30;
+      if (callCraterStrike(player.x + Math.cos(a) * dist, player.y + Math.sin(a) * dist,
+        delay + 12 + i * 14, radius)) break;
+    }
+  }
+}
+
+// The pull lets go. Everything still inside the ring is hit, and the ring
+// itself becomes a wall of rock thrown outward, so the edge is no refuge.
+function fireMoonSlam() {
+  bossExplosions.push({ x: boss.x, y: boss.y, r: MOON_SLAM_R * 0.35, max: MOON_SLAM_R * 2.1, life: 34, maxLife: 34 });
+  bossExplosions.push({ x: boss.x, y: boss.y, r: 0, max: MOON_SLAM_R * 1.1, life: 22, maxLife: 22 });
+  spawnBossParticles(46, {
+    x: boss.x, y: boss.y, minSpeed: 3, maxSpeed: 11, minSize: 2, maxSize: 7, life: 46,
+    colors: ["#ffffff", "#e9e6dc", "#a5a29b", "#5c5a56"], drag: 0.97,
+  });
+  screenShakeFrames = Math.max(screenShakeFrames, 22);
+  screenShakeStrength = Math.max(screenShakeStrength, 13);
+  bossShakeTimer = Math.max(bossShakeTimer, 18);
+  playSound(38, 1.2, "sawtooth");
+  playSound(96, 0.5, "square");
+  const arms = bossPhase >= 3 ? 20 : 15;
+  const start = rand(0, Math.PI * 2);
+  for (let i = 0; i < arms; i++) {
+    const a = start + (i / arms) * Math.PI * 2;
+    bossBullets.push({
+      x: boss.x + Math.cos(a) * MOON_SLAM_R * 0.5,
+      y: boss.y + Math.sin(a) * MOON_SLAM_R * 0.5,
+      vx: Math.cos(a) * 3.2, vy: Math.sin(a) * 3.2,
+      r: 7, color: "#cfcbc2", core: "#fbf9f3",
+    });
+  }
+  if (!devGodMode && playerInvulnerable <= 0 && !bossDying
+    && Math.hypot(player.x - boss.x, player.y - boss.y) < MOON_SLAM_R) {
+    hurtPlayer();
+  }
+}
+
+function updateMoonImpacts() {
+  for (const im of moonImpacts) {
+    im.t--;
+    if (im.t !== 0) continue;
+    // landfall
+    bossExplosions.push({ x: im.x, y: im.y, r: im.r * 0.3, max: im.r * 1.7, life: 26, maxLife: 26 });
+    spawnBossParticles(24, {
+      x: im.x, y: im.y, minSpeed: 1.4, maxSpeed: 6.5, minSize: 2, maxSize: 6, life: 40,
+      colors: ["#ffffff", "#d9d6cf", "#8d8a85", "#4a4845"], gravity: 0.05, drag: 0.97,
+    });
+    spawnSparks(im.x, im.y, 14, "#e6e3db", { minSpeed: 1, maxSpeed: 5, life: 34, drag: 0.95 });
+    screenShakeFrames = Math.max(screenShakeFrames, 12);
+    screenShakeStrength = Math.max(screenShakeStrength, 7);
+    playSound(48, 0.45, "sawtooth");
+    playSound(120, 0.16, "square");
+    // The marker is drawn as an ellipse (0.62 vertical), so the hit test is the
+    // same ellipse. A circular test under an elliptical ring meant the top and
+    // bottom of every marker lied about where it was safe to stand.
+    const ex = (player.x - im.x) / (im.r * 0.82);
+    const ey = (player.y - im.y) / (im.r * 0.62 * 0.86);
+    if (!devGodMode && playerInvulnerable <= 0 && !bossDying && ex * ex + ey * ey < 1) {
+      hurtPlayer();
+      if (!gameActive) return;
+    }
+    // the strike throws its own debris back up — this is where the chips that
+    // chase the ship actually come from
+    if (bossPhase >= 2 && bossMinions.length < MINION_CAP && Math.random() < 0.4) {
+      spawnBossMinion(rand(0, Math.PI * 2));
+    }
+    // and it sprays the rim, so hugging the edge of a marker is not a free out.
+    // Phase 3 only: at four or five craters a volley, spraying every one of them
+    // from phase 2 put twenty extra rounds in the air per volley.
+    if (bossPhase >= 3) {
+      const shards = 5;
+      const start = rand(0, Math.PI * 2);
+      for (let i = 0; i < shards; i++) {
+        const a = start + (i / shards) * Math.PI * 2;
+        bossBullets.push({
+          x: im.x + Math.cos(a) * im.r * 0.4, y: im.y + Math.sin(a) * im.r * 0.4,
+          vx: Math.cos(a) * 2.1, vy: Math.sin(a) * 2.1,
+          r: 5, color: "#c4c0b8", core: "#f2efe8",
+        });
+      }
+    }
+  }
+  compact(moonImpacts, (im) => im.t > -20);
+}
+
+// The floor marker and the rock falling into it. The rock is drawn arriving
+// exactly on the frame the ring closes, so the timing can be read off the
+// screen rather than memorised.
+function drawMoonImpacts(t) {
+  for (const im of moonImpacts) {
+    const done = im.t <= 0;
+    if (done) {
+      // the scorch left behind, fading out
+      const fade = Math.max(0, 1 + im.t / 20);
+      ctx.save();
+      ctx.globalAlpha = fade * 0.5;
+      ctx.fillStyle = "#1a1917";
+      ctx.beginPath(); ctx.ellipse(im.x, im.y, im.r * 0.8, im.r * 0.5, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = "rgba(233, 230, 220, .55)";
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.ellipse(im.x, im.y, im.r * (1.1 - fade * 0.3), im.r * 0.62, 0, 0, Math.PI * 2); ctx.stroke();
+      ctx.restore();
+      continue;
+    }
+    const p = 1 - im.t / im.max;          // 0 -> 1 as it falls
+    const urgent = im.t < 22;
+    ctx.save();
+    // target ring: an outer fixed circle and an inner one closing onto it
+    ctx.globalAlpha = 0.32 + p * 0.5;
+    ctx.strokeStyle = urgent ? "#fff0c0" : "#cfe4ff";
+    ctx.lineWidth = urgent ? 3 : 2;
+    ctx.beginPath(); ctx.ellipse(im.x, im.y, im.r, im.r * 0.62, 0, 0, Math.PI * 2); ctx.stroke();
+    ctx.globalAlpha = 0.25 + p * 0.6;
+    ctx.beginPath();
+    ctx.ellipse(im.x, im.y, im.r * (1.55 - p * 0.55), im.r * 0.62 * (1.55 - p * 0.55), 0, 0, Math.PI * 2);
+    ctx.stroke();
+    // crosshair ticks, so the centre is unambiguous
+    ctx.globalAlpha = 0.4 + p * 0.4;
+    ctx.beginPath();
+    for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) {
+      ctx.moveTo(im.x + dx * im.r * 0.55, im.y + dy * im.r * 0.34);
+      ctx.lineTo(im.x + dx * im.r * 0.85, im.y + dy * im.r * 0.52);
+    }
+    ctx.stroke();
+    ctx.restore();
+
+    // the rock itself, coming down on a slant and arriving as the ring closes
+    const fall = im.t / im.max;
+    const rx = im.x - Math.sin(im.tilt) * fall * (im.y + 160);
+    const ry = im.y - fall * (im.y + 160);
+    const size = 7 + p * 7;
+    if (quality.glow) drawGlow("#ffd9a0", Math.round(14 + p * 16), rx, ry);
+    ctx.save();
+    ctx.translate(rx, ry);
+    ctx.rotate(im.tilt + t * 0.02);
+    ctx.fillStyle = "#8a867f";
+    ctx.beginPath();
+    ctx.moveTo(0, -size); ctx.lineTo(size * 0.85, -size * 0.2); ctx.lineTo(size * 0.5, size * 0.9);
+    ctx.lineTo(-size * 0.6, size * 0.8); ctx.lineTo(-size * 0.9, -size * 0.25);
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle = "#c9c5bd";
+    ctx.beginPath(); ctx.arc(-size * 0.25, -size * 0.3, size * 0.32, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+    // entry trail
+    if (Math.random() < 0.7) {
+      spawnSparks(rx, ry, 1, Math.random() < 0.5 ? "#ffd9a0" : "#e9e6dc",
+        { minSpeed: 0.2, maxSpeed: 1, life: 22, drag: 0.95, maxSize: 2 });
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The whole of the Moon's combat, per frame. Kept out of `drawBossArea` so it
+// has the same shape as `updateVenusBoss` — until both bosses looked alike
+// there was no shape for a third to copy.
+// ---------------------------------------------------------------------------
+function updateMoonBoss(t) {
+  const rate = phaseRate();
+
+  // It is heavy. It sweeps slowly and leans after the ship rather than chasing
+  // it, so the arena always has somewhere to be — just not for long.
+  bossDrift += 0.0034 / rate;
+  const range = Math.min(190 + bossPhase * 34, W * 0.24);
+  const target = W / 2 + Math.sin(bossDrift) * range + (player.x - W / 2) * (0.24 + bossPhase * 0.06);
+  boss.x += (target - boss.x) * 0.018;
+  boss.x = Math.max(120, Math.min(W - 120, boss.x));
+
+  // --- tidal pull ---------------------------------------------------------
+  if (moonPull > 0) {
+    moonPull--;
+    const dx = boss.x - player.x;
+    const dy = boss.y - player.y;
+    const d = Math.hypot(dx, dy) || 1;
+    // Tuned against the ship's measured equilibrium, not by feel. With no input
+    // the velocity is smoothed toward zero (0.77) *and* dragged (0.88), so it
+    // keeps only 0.678 of itself per frame and a constant pull `p` settles at
+    // `p / 0.322`. Thrusting away instead converges on `maxSpeed`, giving
+    // `(p - 0.23 * maxSpeed) / 0.23`. At 0.8 that is a drift of ~2.5 px/frame in
+    // versus ~2.0 px/frame out: over the ~2.6 seconds it lasts, doing nothing
+    // puts you inside the ring and flying puts you clear of it, with no third
+    // option. Anything under about 0.5 is invisible — the first cut of this
+    // used 0.22 and players correctly reported that it did nothing at all.
+    const base = bossPhase >= 3 ? 0.86 : 0.8;
+    const strength = base * (0.82 + 0.36 * Math.min(1, d / 420));
+    player.vx += (dx / d) * strength;
+    player.vy += (dy / d) * strength;
+    if (Math.random() < 0.75) {
+      const a = rand(0, Math.PI * 2);
+      const dist = rand(bossRadius() * 1.5, bossRadius() * 5.2);
+      spawnSparks(boss.x + Math.cos(a) * dist, boss.y + Math.sin(a) * dist, 1, "#cfe4ff",
+        { angle: a + Math.PI, spread: 0.12, minSpeed: 1.8, maxSpeed: 3.8, life: 26, drag: 1, maxSize: 2 });
+    }
+    // the ship itself streams as it strains against it
+    if (Math.random() < 0.5) {
+      spawnSparks(player.x, player.y, 1, "#bcd8ff",
+        { angle: Math.atan2(dy, dx), spread: 0.3, minSpeed: 1.2, maxSpeed: 2.6, life: 20, maxSize: 2 });
+    }
+    if (moonPull === 0) fireMoonSlam();
+  } else if (bossPhase >= 2 && !bossDying && --moonPullTimer <= 0) {
+    moonPull = bossPhase >= 3 ? 175 : 155;
+    // Unscaled for the same reason as the volley: with `rate` applied, phase 3
+    // started a new pull every ~4.9s and each one lasted 3.2s, so the ship was
+    // being dragged roughly half the time.
+    moonPullTimer = Math.round(rand(640, 880));
+    bossChargeAnim = BOSS_CHARGE_FRAMES;
+    bossExplosions.push({ x: boss.x, y: boss.y, r: bossRadius(), max: bossRadius() * 5, life: 30, maxLife: 30 });
+    showWaveBanner("TIDAL PULL", "GET OUT OF THE RING");
+    playSound(44, 1.1, "sine");
+    playSound(88, 0.7, "triangle");
+  }
+
+  // --- eclipse ------------------------------------------------------------
+  if (moonEclipse > 0) {
+    moonEclipse--;
+    // In the dark it stops aiming and simply sweeps: two slow arms of rock
+    // turning out of the corona. You cannot read its face, but you can read
+    // the spiral, so the eclipse is a pattern to solve rather than a coin toss.
+    moonSpiral += 0.075;
+    // Spaced so the arms clear the screen about as fast as they are laid down;
+    // any tighter and four seconds of eclipse silts the whole arena up.
+    if (moonEclipse % 12 === 0 && bossBullets.length < 70) {
+      for (const arm of [0, Math.PI]) {
+        const a = moonSpiral + arm;
+        bossBullets.push({
+          x: boss.x + Math.cos(a) * MOON_RADIUS,
+          y: boss.y + Math.sin(a) * MOON_RADIUS,
+          vx: Math.cos(a) * 3, vy: Math.sin(a) * 3,
+          r: 6, color: "#ffe9b8", core: "#fffdf2",
+        });
+      }
+    }
+    if (moonEclipse === 0) {
+      // it comes back out of shadow with a flash and a ring you have to leave
+      bossExplosions.push({ x: boss.x, y: boss.y, r: 0, max: bossRadius() * 4.2, life: 26, maxLife: 26 });
+      playSound(320, 0.4, "square");
+      screenShakeFrames = Math.max(screenShakeFrames, 10);
+      screenShakeStrength = Math.max(screenShakeStrength, 6);
+    }
+  } else if (bossPhase >= 3 && !bossDying && --moonEclipseTimer <= 0) {
+    moonEclipse = 210;
+    moonEclipseTimer = 1000;
+    showWaveBanner("ECLIPSE", "FIGHT BLIND");
+    playSound(36, 1.6, "sine");
+  }
+
+  // --- crater fall --------------------------------------------------------
+  // Cadence is NOT multiplied by `phaseRate()`. These three numbers are already
+  // the per-phase tuning; scaling them again meant phase 3 threw a five-marker
+  // volley every 1.8 seconds, which is where the fight stopped being playable.
+  if (!bossDying && --moonImpactTimer <= 0) {
+    callCraterVolley();
+    moonImpactTimer = Math.round((bossPhase >= 3 ? 235 : bossPhase >= 2 ? 300 : 360) + rand(-30, 40));
+  }
+  updateMoonImpacts();
+  if (!gameActive) return;
+
+  // --- ejecta chips -------------------------------------------------------
+  if (bossPhase >= 2 && --bossMinionTimer <= 0) {
+    const batch = 2;
+    for (let i = 0; i < batch; i++) spawnBossMinion(rand(0, Math.PI * 2));
+    bossMinionTimer = Math.round((bossPhase >= 3 ? 320 : 400) + rand(-40, 60));
+  }
+
+  // dust lifts off the surface once it has been properly worked over
+  if (bossDamageStage >= 2 && Math.random() < 0.35) {
+    const a = rand(0, Math.PI * 2);
+    spawnSparks(boss.x + Math.cos(a) * MOON_RADIUS * 0.72, boss.y + Math.sin(a) * MOON_RADIUS * 0.72,
+      1, Math.random() < 0.5 ? "#e9e6dc" : "#9a978f",
+      { minSpeed: 0.2, maxSpeed: 0.9, life: 44, drag: 0.98, gravity: -0.015 });
+  }
+
+  // While it is eclipsed the Moon stops aiming altogether: no regolith, no
+  // boulders, no tracked shot — just the two spiral arms and the crater fuses
+  // already burning. Darkness plus every other pattern at once was the single
+  // worst moment in the fight; as its own set piece the eclipse is a rhythm
+  // break you have to read rather than survive blind. The timers freeze with
+  // it, so nothing fires the instant the light comes back.
+  if (moonEclipse > 0) return;
+
+  // --- regolith ring ------------------------------------------------------
+  bossBurstTimer--;
+  if (bossBurstTimer === 40) {
+    bossChargeAnim = BOSS_CHARGE_FRAMES;
+    playSound(70, 0.4, "triangle");
+  }
+  if (bossBurstTimer <= 0) {
+    // a full ring with one gap cut in it: always survivable, never ignorable
+    const count = 14 + bossPhase * 4;
+    const start = rand(0, Math.PI * 2);
+    const gap = bossPhase >= 3 ? 0.62 : 0.72;     // the way out narrows late
+    const speed = 2.2 + bossPhase * 0.25;
+    for (let i = 0; i < count; i++) {
+      const a = start + (i / count) * Math.PI * 2;
+      let delta = Math.atan2(player.y - boss.y, player.x - boss.x) - a;
+      delta = Math.abs(Math.atan2(Math.sin(delta), Math.cos(delta)));
+      if (delta < gap) continue;                  // the gap opens toward the ship
+      bossBullets.push({
+        x: boss.x, y: boss.y, vx: Math.cos(a) * speed, vy: Math.sin(a) * speed,
+        r: 6, color: "#cfcbc2", core: "#fbf9f3",
+      });
+    }
+    bossShootAnim = BOSS_SHOOT_FRAMES;
+    bossShakeTimer = Math.max(bossShakeTimer, 10);
+    bossExplosions.push({ x: boss.x, y: boss.y, r: 0, max: 170, life: 22, maxLife: 22 });
+    spawnBossParticles(18, {
+      x: boss.x, y: boss.y, minSpeed: 2, maxSpeed: 5, minSize: 2, maxSize: 5, life: 30,
+      colors: ["#e9e6dc", "#b4b1a9", "#7a7770"], drag: 0.97,
+    });
+    playSound(120, 0.35, "sawtooth");
+    bossBurstTimer = Math.round(rand(430, 620) * rate);
+  }
+
+
+  // --- boulder spread -----------------------------------------------------
+  bossAttackTimer--;
+  if (bossAttackTimer === 28) {
+    bossChargeAnim = BOSS_CHARGE_FRAMES;
+    playSound(70, 0.22, "triangle");
+  }
+  if (bossAttackTimer <= 0) {
+    const baseAngle = trackedBossAngle(boss.x, boss.y + 60, 26);
+    const pattern = Math.random();
+    if (pattern < 0.45) {
+      for (const offset of [-0.32, 0, 0.32]) pushMoonBoulder(baseAngle + offset, 3.5);
+    } else if (pattern < 0.8) {
+      for (const offset of [-0.48, -0.24, 0, 0.24, 0.48]) pushMoonBoulder(baseAngle + offset, 3.05);
+    } else {
+      for (const offset of [-0.12, 0.12]) pushMoonBoulder(baseAngle + offset, 4.2);
+    }
+    bossShootAnim = BOSS_SHOOT_FRAMES;
+    bossChargeAnim = 0;
+    bossShakeTimer = Math.max(bossShakeTimer, 5);
+    spawnBossParticles(18, {
+      x: boss.x, y: boss.y + 34, angle: baseAngle, spread: 0.7, minSpeed: 1.5, maxSpeed: 5,
+      minSize: 2, maxSize: 5, life: 26, colors: ["#e9e6dc", "#b4b1a9", "#fbf9f3"],
+    });
+    playSound(220, 0.15, "sawtooth");
+    bossAttackTimer = Math.round(rand(175, 290) * phaseRate());
+  }
+
+  // --- aimed rock ---------------------------------------------------------
+  bossShotTimer--;
+  if (bossShotTimer === 12) {
+    bossChargeAnim = BOSS_CHARGE_FRAMES;
+    playSound(96, 0.12, "triangle");
+  }
+  if (bossChargeAnim > 0) bossChargeAnim--;
+  if (bossShotTimer <= 0) {
+    const angle = trackedBossAngle(boss.x, boss.y + 70, 18);
+    const pattern = Math.random();
+    const offsets = pattern < 0.56 ? [0] : pattern < 0.82 ? [-0.14, 0.14] : [-0.16, 0, 0.16];
+    const speed = (pattern < 0.82 ? 3.5 : 4.05) + (bossPhase - 1) * 0.35;
+    for (const offset of offsets) {
+      const shotAngle = angle + offset;
+      enemyBullets.push({
+        x: boss.x,
+        y: boss.y + 70,
+        vx: Math.cos(shotAngle) * speed,
+        vy: Math.sin(shotAngle) * speed,
+        speed,
+        turnRate: (pattern < 0.56 ? 0.026 : pattern < 0.82 ? 0.018 : 0) * (bossPhase >= 3 ? 1.35 : 1),
+        homing: (pattern < 0.56 ? 105 : pattern < 0.82 ? 60 : 0) * (bossPhase >= 3 ? 1.4 : 1),
+        kind: "meteor",
+      });
+    }
+    bossShootAnim = BOSS_SHOOT_FRAMES;
+    bossChargeAnim = 0;
+    spawnBossParticles(10, {
+      x: boss.x, y: boss.y + 34, angle, spread: 0.5, minSpeed: 1, maxSpeed: 3.6,
+      minSize: 2, maxSize: 4, life: 20, colors: ["#e9e6dc", "#b4b1a9", "#fff6e0"],
+    });
+    bossShotTimer = Math.round(rand(52, 96) * rate);
+  }
 }
 
 function drawBossArea(t) {
   const venus = bossKind === "venus";
-  ctx.fillStyle = venus ? "#2a0d05" : "#16051f"; ctx.fillRect(0, 0, W, H);
-  ctx.save();
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.drawImage(bossGridLayer, 0, 0);
-  ctx.restore();
+  // The Moon fights in the same star field the rest of its chapter flies
+  // through. The purple grid was the one place the backdrop changed identity
+  // mid-run. Venus keeps the grid: its arena is the furnace, not open space.
+  ctx.fillStyle = venus ? "#2a0d05" : "#000000"; ctx.fillRect(0, 0, W, H);
+  if (venus) {
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.drawImage(bossGridLayer, 0, 0);
+    ctx.restore();
+  } else {
+    drawStaticStars(t);
+  }
 
   if (bossDying) updateBossDeath();
   if (!bossDying) updateBossPhase();
-  if (venus) drawVenus(t); else drawMercury(t);
+  if (venus) drawVenus(t); else drawMoon(t);
   updateBossExplosions();
   updateBossParticles();
   updateSparks();
+  updateMuzzleFlashes();
+  // The veil goes over the body and its debris but under everything that can
+  // hurt you, so an eclipse hides the Moon's tells and never the bullets.
+  if (!venus) { drawEclipseVeil(t); drawMoonImpacts(t); }
 
   // TECHNOLOGY burns the boss for as long as the beam is on it
   if (superBeam && !bossDying && superBeam.life % BEAM_TICK === 0 && beamDistance(boss.x, boss.y) < BEAM_HALF_WIDTH + bossRadius() * 0.8) {
@@ -4700,86 +5965,8 @@ function drawBossArea(t) {
     updateVenusBoss(t);
   }
 
-  if (!bossDying && !venus) {
-    const rate = phaseRate();
-    // Mercury sweeps the arena and leans toward the player. A stationary boss is
-    // what made "stand here and never get hit" possible in the first place, and
-    // it sweeps harder each phase.
-    bossDrift += 0.0048 / rate;
-    const range = Math.min(220 + bossPhase * 30, W * 0.24);
-    const target = W / 2 + Math.sin(bossDrift) * range + (player.x - W / 2) * (0.28 + bossPhase * 0.05);
-    boss.x += (target - boss.x) * 0.022;
-    boss.x = Math.max(120, Math.min(W - 120, boss.x));
-
-    // From phase 2 it keeps throwing chips of itself at the ship.
-    if (bossPhase >= 2 && --bossMinionTimer <= 0) {
-      const batch = bossPhase >= 3 ? 3 : 2;
-      for (let i = 0; i < batch; i++) spawnBossMinion(rand(0, Math.PI * 2));
-      bossMinionTimer = Math.round((bossPhase >= 3 ? 250 : 360) + rand(-40, 60));
-    }
-
-    // molten embers rise off the cracks once it is properly hurt
-    if (bossDamageStage >= 2 && Math.random() < 0.4) {
-      const a = rand(0, Math.PI * 2);
-      spawnSparks(boss.x + Math.cos(a) * BOSS_RADIUS * 0.7, boss.y + Math.sin(a) * BOSS_RADIUS * 0.7,
-        1, Math.random() < 0.5 ? "#ff6a20" : "#ffd65a",
-        { minSpeed: 0.2, maxSpeed: 0.9, life: 40, drag: 0.98, gravity: -0.02 });
-    }
-
-    // radial burst: rare, slow, easy to walk out of — but it sweeps the arena,
-    // so there is no corner that is safe forever
-    bossBurstTimer--;
-    if (bossBurstTimer === 40) {
-      bossChargeAnim = BOSS_CHARGE_FRAMES;
-      playSound(60, 0.4, "triangle");
-    }
-    if (bossBurstTimer <= 0) {
-      const count = Math.round(rand(7, 11));
-      const phase = rand(0, Math.PI * 2);
-      for (let i = 0; i < count; i++) {
-        const a = phase + (i / count) * Math.PI * 2 + rand(-0.045, 0.045);
-        bossBullets.push({ x: boss.x, y: boss.y, vx: Math.cos(a) * 2.4, vy: Math.sin(a) * 2.4 });
-      }
-      bossShootAnim = BOSS_SHOOT_FRAMES;
-      bossShakeTimer = Math.max(bossShakeTimer, 10);
-      bossExplosions.push({ x: boss.x, y: boss.y, r: 0, max: 150, life: 20, maxLife: 20 });
-      playSound(140, 0.35, "sawtooth");
-      bossBurstTimer = Math.round(rand(450, 650) * phaseRate());
-    }
-
-    bossShotTimer--;
-    if (bossShotTimer === 12) {
-      bossChargeAnim = BOSS_CHARGE_FRAMES;
-      playSound(90, 0.12, "triangle");
-    }
-    if (bossChargeAnim > 0) bossChargeAnim--;
-    if (bossShotTimer <= 0) {
-      const angle = trackedBossAngle(boss.x, boss.y + 70, 18);
-      const pattern = Math.random();
-      const offsets = pattern < 0.56 ? [0] : pattern < 0.82 ? [-0.14, 0.14] : [-0.16, 0, 0.16];
-      const speed = (pattern < 0.82 ? 3.6 : 4.15) + (bossPhase - 1) * 0.35;
-      for (const offset of offsets) {
-        const shotAngle = angle + offset;
-        enemyBullets.push({
-          x: boss.x,
-          y: boss.y + 70,
-          vx: Math.cos(shotAngle) * speed,
-          vy: Math.sin(shotAngle) * speed,
-          speed,
-          turnRate: (pattern < 0.56 ? 0.026 : pattern < 0.82 ? 0.018 : 0) * (bossPhase >= 3 ? 1.35 : 1),
-          homing: (pattern < 0.56 ? 105 : pattern < 0.82 ? 60 : 0) * (bossPhase >= 3 ? 1.4 : 1),
-          kind: "meteor",
-        });
-      }
-      bossShootAnim = BOSS_SHOOT_FRAMES;
-      bossChargeAnim = 0;
-      spawnBossParticles(10, {
-        x: boss.x, y: boss.y + 34, angle, spread: 0.5, minSpeed: 1, maxSpeed: 3.6,
-        minSize: 2, maxSize: 4, life: 20, colors: ["#ffdc5a", "#ff8a32", "#fff3c4"],
-      });
-      bossShotTimer = Math.round(rand(48, 94) * phaseRate());
-    }
-  }
+  if (!bossDying && !venus) updateMoonBoss(t);
+  if (!gameActive) return;
 
   for (const bullet of enemyBullets) {
     if (bullet.homing > 0) {
@@ -4822,7 +6009,7 @@ function drawBossArea(t) {
       ctx.beginPath(); ctx.arc(-2, -3, 2, 0, Math.PI * 2); ctx.fill();
     }
     ctx.restore();
-    if (!adminInvincible && playerInvulnerable === 0 && Math.abs(bullet.x - player.x) < 22 && Math.abs(bullet.y - player.y) < 24) {
+    if (!devGodMode && playerInvulnerable === 0 && Math.abs(bullet.x - player.x) < 22 && Math.abs(bullet.y - player.y) < 24) {
       hurtPlayer();
       bullet.y = H + 200;
       if (!gameActive) return;
@@ -4850,11 +6037,11 @@ function drawBossArea(t) {
     bullet.x += bullet.vx;
     bullet.y += bullet.vy;
     drawPlayerBullet(bullet);
-    if (!bossDying && Math.hypot(bullet.x - boss.x, bullet.y - boss.y) < bossRadius() + 4) {
+    if (!bossDying && bullet.ignore !== boss && Math.hypot(bullet.x - boss.x, bullet.y - boss.y) < bossRadius() + 4) {
       const hitX = bullet.x;
       const hitY = bullet.y;
       bullet.y = -100;
-      damageBoss(bullet.damage || 1, bullet.x, bullet.y);
+      damageBoss(bullet.damage || 1, hitX, hitY);
       superDamage += bullet.damage || 1;
       updateSuperMeter();
       if (bullet.type === "tech0") {
@@ -4862,38 +6049,17 @@ function drawBossArea(t) {
         playSound(180, 0.1, "square");
         startTechChainBoss(hitX, hitY, null);
       }
+      // Droplets splash off the hull and rake the brood instead.
+      if (bullet.type === "magma") burstMagma(bullet, hitX, hitY, boss);
     }
   }
   compact(bullets, (bullet) => bullet.x > -20 && bullet.x < W + 20 && bullet.y > -20 && bullet.y < H + 20);
   if (!bossDying) {
     setWidth(dom.bossFill, Math.max(0, boss.health / bossMaxHealth()) * 100);
-  }
-
-  if (!bossDying && !venus) {
-    bossAttackTimer--;
-    if (bossAttackTimer === 28) {
-      bossChargeAnim = BOSS_CHARGE_FRAMES;
-      playSound(70, 0.22, "triangle");
-    }
-    if (bossAttackTimer <= 0) {
-      const baseAngle = trackedBossAngle(boss.x, boss.y + 60, 26);
-      const pattern = Math.random();
-      if (pattern < 0.45) {
-        for (const offset of [-0.32, 0, 0.32]) pushBossOrb(baseAngle + offset, 3.5);
-      } else if (pattern < 0.8) {
-        for (const offset of [-0.48, -0.24, 0, 0.24, 0.48]) pushBossOrb(baseAngle + offset, 3.05);
-      } else {
-        for (const offset of [-0.12, 0.12]) pushBossOrb(baseAngle + offset, 4.2);
-      }
-      bossShootAnim = BOSS_SHOOT_FRAMES;
-      bossChargeAnim = 0;
-      bossShakeTimer = Math.max(bossShakeTimer, 5);
-      spawnBossParticles(18, {
-        x: boss.x, y: boss.y + 34, angle: baseAngle, spread: 0.7, minSpeed: 1.5, maxSpeed: 5,
-        minSize: 2, maxSize: 5, life: 26, colors: ["#ffdc5a", "#ff8a32", "#fff3c4"],
-      });
-      playSound(220, 0.15, "sawtooth");
-      bossAttackTimer = Math.round(rand(175, 290) * phaseRate());
+    // The bar is notched into the three phases; stamping which one we are in
+    // lets the CSS recolour it, so the phase is legible from the HUD alone.
+    if (dom.bossHealth && dom.bossHealth.dataset.phase !== String(bossPhase)) {
+      dom.bossHealth.dataset.phase = String(bossPhase);
     }
   }
 
@@ -4911,7 +6077,7 @@ function drawBossArea(t) {
     }
     const hitWidth = player.shrunk ? 13 : 22;
     const hitHeight = player.shrunk ? 14 : 24;
-    if (!adminInvincible && playerInvulnerable === 0 && Math.abs(b.x - player.x) < hitWidth + r && Math.abs(b.y - player.y) < hitHeight + r) {
+    if (!devGodMode && playerInvulnerable === 0 && Math.abs(b.x - player.x) < hitWidth + r && Math.abs(b.y - player.y) < hitHeight + r) {
       hurtPlayer();
       b.y = H + 200;
       if (!gameActive) return;
@@ -4938,69 +6104,109 @@ function drawBossArea(t) {
 }
 
 let rewardRevealTimer = null;
+let rewardSfxTimers = [];
+let rewardMode = "moon";
 function showVictory() {
   gamePaused = true;
   bossIntro = true;
+  // Hearts, wave, score and the super meter are for a run in progress. Behind
+  // the end-of-run cards they just leak the HUD into the artwork.
+  dom.gameUi.classList.add("run-complete");
   music.play("victory");
   document.getElementById("boss-player-name").textContent = playerName;
   document.getElementById("victory-player-name").textContent = playerName;
   setText(document.getElementById("victory-score"), String(score).padStart(6, "0"));
   setText(document.getElementById("victory-waves"), "5");
-  unlockMercuryRewards();
+  unlockMoonRewards();
   refreshLoadoutUI();
   dom.victoryScreen.classList.remove("visible");
   dom.victoryScreen.setAttribute("aria-hidden", "true");
+  rewardMode = "moon";
+  celebrationScene = "space";
+  const rewards = document.getElementById("reward-screen");
+  rewards.classList.remove("venus");
+  rewards.querySelector(".reward-moon").hidden = false;
+  rewards.querySelector(".reward-venus").hidden = true;
+  openRewardScreen();
+}
+
+// Venus pays out Magma the same way Mercury paid out Tech.0: a standalone
+// reward beat before the run carries on. The shared reveal below plays the
+// lock cinematic, the sounds and the continue timing for both planets.
+function showVenusRewards() {
+  gamePaused = true;
+  bossIntro = true;
+  music.play("victory");
+  unlockVenusRewards();
+  refreshLoadoutUI();
+  rewardMode = "venus";
+  celebrationScene = "venus-arena";
+  const rewards = document.getElementById("reward-screen");
+  rewards.classList.add("venus");
+  rewards.querySelector(".reward-moon").hidden = true;
+  rewards.querySelector(".reward-venus").hidden = false;
+  openRewardScreen();
+}
+
+function openRewardScreen() {
   syncMobileControls();
   clearTimeout(rewardRevealTimer);
+  for (const timer of rewardSfxTimers) clearTimeout(timer);
+  rewardSfxTimers = [];
   const rewards = document.getElementById("reward-screen");
   const next = document.getElementById("reward-continue");
   next.disabled = true;
+  next.classList.remove("ready");
+  rewards.classList.remove("snap");
   rewards.classList.add("visible");
   rewards.setAttribute("aria-hidden", "false");
   rewards.focus();
+  // Lock-cinematic foley, matched to the CSS beats: three strain creaks, the
+  // snap, the title slam, then the continue chime.
+  const at = (ms, fn) => rewardSfxTimers.push(setTimeout(() => {
+    if (rewards.classList.contains("visible")) fn();
+  }, ms));
+  at(200, () => playSound(140, 0.09, "square"));
+  at(500, () => playSound(165, 0.09, "square"));
+  at(800, () => playSound(190, 0.1, "square"));
+  at(1000, () => {
+    rewards.classList.add("snap");
+    playSound(1200, 0.06, "square");
+    playSound(90, 0.3, "sawtooth");
+  });
+  at(1250, () => { playSound(660, 0.12, "triangle"); playSound(990, 0.16, "triangle"); });
+  at(1450, () => playSound(780, 0.1, "sine"));
+  at(1600, () => playSound(920, 0.12, "sine"));
   rewardRevealTimer = setTimeout(() => {
     if (!rewards.classList.contains("visible")) return;
     next.disabled = false;
+    next.classList.add("ready");
     next.focus();
     playSound(880, .18, "triangle");
+    playSound(1320, .22, "sine");
   }, 1800);
 }
 
-function drawTestRoom() {
-  ctx.fillStyle = "#07131a"; ctx.fillRect(0, 0, W, H);
-  for (const bomb of superBombs) {
-    bomb.x += bomb.vx; bomb.y += bomb.vy; bomb.life--;
-    const color = bomb.color || superColor("bomb");
-    drawGlow(color, 16, bomb.x, bomb.y);
-    ctx.fillStyle = color;
-    ctx.beginPath(); ctx.arc(bomb.x, bomb.y, 10, 0, Math.PI * 2); ctx.fill();
-    if (Math.hypot(bomb.x - W / 2, bomb.y - 190) < 68 || bomb.life <= 0) {
-      bomb.explode = true;
-      if (Math.hypot(bomb.x - W / 2, bomb.y - 190) < BOMB_RADIUS + 58) testDamage += BOMB_BOSS_DAMAGE;
-      startBombBlast(bomb.x, bomb.y, BOMB_RADIUS, color);
-    }
-  }
-  compact(superBombs, (bomb) => !bomb.explode);
-  updateBombBlasts();
-  for (const bullet of bullets) {
-    bullet.x += bullet.vx; bullet.y += bullet.vy;
-    drawPlayerBullet(bullet);
-    if (Math.hypot(bullet.x - W / 2, bullet.y - 190) < 58) { bullet.y = -100; testDamage += bullet.damage || 1; superDamage += bullet.damage || 1; updateSuperMeter(); }
-  }
-  compact(bullets, (b) => b.y > -20 && b.y < H + 20 && b.x > -20 && b.x < W + 20);
-  ctx.fillStyle = "#777"; ctx.beginPath(); ctx.arc(W / 2, 190, 58, 0, Math.PI * 2); ctx.fill();
-  ctx.fillStyle = "#aaa"; ctx.beginPath(); ctx.arc(W / 2 - 18, 175, 9, 0, Math.PI * 2); ctx.arc(W / 2 + 20, 205, 7, 0, Math.PI * 2); ctx.fill();
-  if (superBeam && superBeam.life % BEAM_TICK === 0 && beamDistance(W / 2, 190) < BEAM_HALF_WIDTH + 58) {
-    testDamage += 2;
-    superDamage += 2;
-  }
-  updateSparks();
-  updateSuperBeam(0);
-  updateSuperEntities(performance.now());
-  drawChargeAura(performance.now());
-  setText(dom.testDamage, `DAMAGE: ${testDamage}`);
-  updateChargeMeter();
-  drawPlayer();
+// Local space: the hull points up, so the flame hangs off +y. Called from inside
+// drawPlayer's transform — it inherits the ship's position, rotation and scale.
+function drawShipThrust(now, drive) {
+  const flick = 0.72 + Math.abs(Math.sin(now * 0.028)) * 0.28;
+  const reach = (0.62 + drive * 0.55) * flick;
+  ctx.save();
+  ctx.globalCompositeOperation = "lighter";
+  ctx.fillStyle = "rgba(255, 110, 30, .3)";
+  ctx.beginPath();
+  ctx.moveTo(-7.5, 12); ctx.lineTo(0, 12 + 26 * reach); ctx.lineTo(7.5, 12); ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = "rgba(255, 176, 74, .48)";
+  ctx.beginPath();
+  ctx.moveTo(-4.8, 11); ctx.lineTo(0, 11 + 17 * reach); ctx.lineTo(4.8, 11); ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = "rgba(255, 238, 204, .88)";
+  ctx.beginPath();
+  ctx.moveTo(-2.4, 10); ctx.lineTo(0, 10 + 9 * reach); ctx.lineTo(2.4, 10); ctx.closePath();
+  ctx.fill();
+  ctx.restore();
 }
 
 function drawPlayer() {
@@ -5036,6 +6242,10 @@ function drawPlayer() {
     ctx.globalCompositeOperation = "source-over";
     ctx.globalAlpha = 1;
   }
+  // Engine: the same three-cone flame the versus card lights, drawn behind the
+  // hull inside the ship's own transform so it always trails the nose. It burns
+  // harder while the player is actually driving.
+  drawShipThrust(now, Math.min(1, Math.hypot(player.vx, player.vy) / Math.max(0.001, player.maxSpeed)));
   ctx.fillStyle = playerColor;
   ctx.fill(PLAYER_HULL);
   ctx.restore();
@@ -5059,10 +6269,12 @@ function drawPlayer() {
 function endGame() {
   const defeatedByBoss = bossMode;
   const venusWon = bossMode && bossKind === "venus";
+  deathScene = bossMode
+    ? (bossKind === "venus" ? "venus-arena" : "space")
+    : (wave >= 6 ? "venus-sky" : "space");
   gameActive = false;
   playSound(90, 0.55, "sawtooth");
   playSound(60, 1.1, "sawtooth");
-  document.getElementById("test-damage").classList.remove("visible");
   bossIntro = false;
   music.stop();
   bossMode = false;
@@ -5073,19 +6285,26 @@ function endGame() {
   enemyBullets = [];
   syncMobileControls();
   syncWakeLock();
+  versusCardUp = false;
+  defeatPortrait = defeatedByBoss;
+  // Losing to a boss should cost you the fight, not the run: TRY AGAIN goes back
+  // to the stage that killed you.
+  retryBoss = defeatedByBoss ? bossKind : null;
+  retryWave = wave;
+  dom.gameUi.classList.toggle("versus", defeatedByBoss);
   if (defeatedByBoss) {
     setText(dom.gameMessage, "");
     document.getElementById("try-again-btn").classList.remove("visible");
     document.getElementById("main-menu-btn").classList.remove("visible");
-    setText(document.getElementById("defeat-title"), venusWon ? "VENUS WINS" : "MERCURY WINS");
+    setText(document.getElementById("defeat-title"), venusWon ? "VENUS WINS" : "THE MOON WINS");
     const quote = document.getElementById("defeat-quote");
     quote.replaceChildren();
     quote.insertAdjacentHTML("afterbegin", venusWon
       ? "\u201cMy sky is lead, my rain is acid \u2014<br />you were never getting past it.\u201d"
-      : "\u201cI'm closest to the sun<br />but will ruin all your fun.\u201d");
-    dom.mercuryDefeatScreen.classList.toggle("venus", venusWon);
-    dom.mercuryDefeatScreen.classList.add("visible");
-    dom.mercuryDefeatScreen.setAttribute("aria-hidden", "false");
+      : "\u201cI have watched every one of your wars<br />and outlasted all of them.\u201d");
+    dom.moonDefeatScreen.classList.toggle("venus", venusWon);
+    dom.moonDefeatScreen.classList.add("visible");
+    dom.moonDefeatScreen.setAttribute("aria-hidden", "false");
     playSound(420, 0.12, "square");
     setTimeout(() => playSound(540, 0.12, "square"), 130);
     setTimeout(() => playSound(660, 0.18, "square"), 260);
@@ -5097,15 +6316,20 @@ function endGame() {
   document.getElementById("main-menu-btn").classList.add("visible");
 }
 
-function startGame() {
+// `startWave` / `startBoss` come from the LEVELS picker; the START button calls
+// this with no arguments and gets wave 1 exactly as before.
+function startGame(startWave = 1, startBoss = null) {
+  defeatPortrait = false;
+  versusCardUp = false;
+  dom.gameUi.classList.remove("versus");
   dom.gameMessage.classList.remove("game-over-message");
   ensureAudio();
   if (audioContext && audioContext.state === "suspended") audioContext.resume();
   gameActive = true;
-  testDamage = 0;
+  celebrationScene = null;
   bossIntro = false;
   bossMode = false;
-  bossKind = "mercury";
+  bossKind = "moon";
   bossDefeated = false;
   bossBullets = [];
   resetBossAnimation();
@@ -5113,7 +6337,7 @@ function startGame() {
   gameOverShown = false;
   score = 0;
   lives = 3;
-  wave = 1;
+  wave = startWave;
   bullets = [];
   enemyBullets = [];
   superBombs = [];
@@ -5122,6 +6346,7 @@ function startGame() {
   clearSuperEntities();
   setPaused(false);
   sparks = [];
+  muzzleFlashes.length = 0;
   superBeam = null;
   heartsDrawn = -1;
   chargeStartedAt = 0;
@@ -5144,9 +6369,16 @@ function startGame() {
   player.y = playerStartY();
   player.vx = 0;
   player.vy = 0;
-  createEnemies();
+  // A boss stage skips the wave entirely and drops straight into the intro card;
+  // anything else builds its roster the same way a cleared wave would. The
+  // empty roster matters: without it a boss stage inherits the last run's
+  // enemies, which would be waiting in the arena the moment the fight ends.
+  if (startBoss) enemies = []; else createEnemies();
   music.play("battle");
-  showWaveBanner("WAVE 1", "GOOD LUCK");
+  if (!startBoss) showWaveBanner(`WAVE ${wave}`, WAVE_INTROS[wave] || "GOOD LUCK");
+  // The sky follows the stage, so jumping to wave 7 opens over Venus rather
+  // than in Mercury's star field (and `endGame` records the right death scene).
+  deathScene = startBoss === "venus" ? "venus-arena" : wave >= 6 ? "venus-sky" : "space";
   document.getElementById("menu-wrap").classList.add("hidden");
   document.getElementById("game-ui").classList.add("active");
   document.getElementById("game-ui").setAttribute("aria-hidden", "false");
@@ -5154,17 +6386,22 @@ function startGame() {
   document.getElementById("try-again-btn").classList.remove("visible");
   document.getElementById("main-menu-btn").classList.remove("visible");
   document.getElementById("boss-health").classList.remove("visible");
-  document.getElementById("test-damage").classList.toggle("visible", testMode);
+  document.getElementById("boss-health").classList.remove("venus");
   document.getElementById("boss-intro").classList.remove("visible");
   document.getElementById("victory-screen").classList.remove("visible");
   document.getElementById("victory-screen").setAttribute("aria-hidden", "true");
-  dom.mercuryDefeatScreen.classList.remove("visible");
-  dom.mercuryDefeatScreen.setAttribute("aria-hidden", "true");
+  dom.gameUi.classList.remove("run-complete");
+  dom.thanksScreen.classList.remove("visible");
+  dom.thanksScreen.setAttribute("aria-hidden", "true");
+  dom.moonDefeatScreen.classList.remove("visible");
+  dom.moonDefeatScreen.setAttribute("aria-hidden", "true");
   playerName = "PLAYER";
   setText(dom.score, "000000");
+  setText(dom.waveNumber, String(wave));
   setLives(lives);
   updateSuperMeter();
   syncMobileControls();
+  if (startBoss) enterBossArea(startBoss);
 }
 
 // ---------------------------------------------------------------------------
@@ -5264,10 +6501,17 @@ function syncWakeLock() {
 // Shared by the pause card, the game-over screen and Escape-to-quit, so leaving
 // a run always tears down the same state.
 function returnToMenu() {
+  celebrationScene = null;
+  versusCardUp = false;
+  dom.gameUi.classList.remove("run-complete");
+  dom.thanksScreen.classList.remove("visible");
+  dom.thanksScreen.setAttribute("aria-hidden", "true");
+  defeatPortrait = false;
+  dom.gameUi.classList.remove("versus");
   gameActive = false;
   gamePaused = false;
   bossMode = false;
-  bossKind = "mercury";
+  bossKind = "moon";
   bossIntro = false;
   bossDying = false;
   venusQueue = [];
@@ -5286,13 +6530,14 @@ function returnToMenu() {
   dom.pauseScreen.setAttribute("aria-hidden", "true");
   document.getElementById("game-ui").classList.remove("active");
   document.getElementById("game-ui").setAttribute("aria-hidden", "true");
-  document.getElementById("menu-wrap").classList.remove("hidden");
+  document.getElementById("menu-wrap").classList.remove("hidden", "launching");
   document.getElementById("boss-health").classList.remove("visible");
+  document.getElementById("boss-health").classList.remove("venus");
   document.getElementById("boss-intro").classList.remove("visible");
   document.getElementById("victory-screen").classList.remove("visible");
   document.getElementById("victory-screen").setAttribute("aria-hidden", "true");
-  dom.mercuryDefeatScreen.classList.remove("visible");
-  dom.mercuryDefeatScreen.setAttribute("aria-hidden", "true");
+  dom.moonDefeatScreen.classList.remove("visible");
+  dom.moonDefeatScreen.setAttribute("aria-hidden", "true");
   setText(dom.gameMessage, "");
   document.getElementById("try-again-btn").classList.remove("visible");
   document.getElementById("main-menu-btn").classList.remove("visible");
@@ -5337,7 +6582,7 @@ function updateSuperMeter() {
   }
 }
 
-const WEAPON_LABELS = { blaster: "BLASTER", charge: "CHARGE", cone: "CONE", tech0: "TECH.0" };
+const WEAPON_LABELS = { blaster: "BLASTER", charge: "CHARGE", cone: "CONE", tech0: "TECH.0", magma: "MAGMA" };
 const SUPER_LABELS = {
   bomb: "BOMB", invincibility: "SHIELD", lance: "TECHNOLOGY",
   star: "STAR", mirror: "MIRROR", drone: "DRONE",
@@ -5348,7 +6593,8 @@ const BOOK_ENTRIES = {
   blaster: ["STEADY & RELIABLE", "A quick stream of yellow bolts. Keep your aim steady and carve a path through the swarm.", "1 DAMAGE · RAPID FIRE"],
   charge: ["HOLD. BUILD. RELEASE.", "Grow an orange energy ball as you charge. Full power burns through every enemy in its path.", "1 / 3 / 5 DAMAGE · FULL CHARGE PIERCES"],
   cone: ["COVER THE ANGLES", "Three green bolts fan out with every shot. Catch moving targets and clear a wider lane.", "3 BOLTS · WIDE SPREAD"],
-  tech0: ["LIGHTNING FINDS A WAY", "A cyan electric round hits hard, then arcs to five nearby enemies — dropping smaller ones outright, including Mercury's brood. Listen for the ready ping: each shot takes well under a second to recharge.", "3 IMPACT · 5 × 1 CHAIN · 0.7 SEC"],
+  tech0: ["LIGHTNING FINDS A WAY", "A cyan electric round hits hard, then arcs to five nearby enemies — dropping smaller ones outright, including the Moon's ejecta. Listen for the ready ping: each shot takes well under a second to recharge.", "3 IMPACT · 5 × 1 CHAIN · 0.7 SEC"],
+  magma: ["HEAVY. SLOW. IT SPLASHES.", "A slug of Venusian lava, crusted black and cracked with fire. Slow in the air, but on impact it bursts into five burning droplets that spray across whatever is standing next to the target. Group them up and let it cook.", "3 IMPACT · 5 × 1 SPLASH · 0.5 SEC"],
   bomb: ["MAKE SOME SPACE", "Launch a blue warhead that erupts into a wide shockwave. Clears nearby enemies and hits a boss for 15 damage.", "160 PX BLAST · 15 BOSS DAMAGE"],
   invincibility: ["A MOMENT OF SAFETY", "Wrap your ship in a golden shield. Push through danger with three seconds of protection.", "3 SEC PROTECTION · HIGH COST"],
   lance: ["CUT THROUGH THE CHAOS", "A purple beam burns through everything along its path. Move your ship to sweep the beam across the battlefield.", "PIERCING BEAM · CONTINUOUS DAMAGE"],
@@ -5367,6 +6613,7 @@ const BOOK_STATS = {
   charge: [["DAMAGE", "1 / 3 / 5"], ["FULL CHARGE", "2.5 sec"], ["FULL PIERCE", "Unlimited"]],
   cone: [["DAMAGE", "1 × 3 bolts"], ["FIRE CYCLE", "0.3 sec"]],
   tech0: [["IMPACT", "3 damage"], ["CHAIN", "5 × 1"], ["FIRE CYCLE", "0.7 sec"]],
+  magma: [["IMPACT", "3 damage"], ["SPLASH", "5 × 1"], ["FIRE CYCLE", "0.5 sec"]],
   bomb: [["BOSS DAMAGE", "15"], ["BLAST RADIUS", "160 px"], ["NORMAL ENEMIES", "Instant defeat"]],
   invincibility: [["DAMAGE", "None"], ["PROTECTION", "3 sec"], ["METER COST", "52 damage"]],
   lance: [["BOSS DAMAGE", "3 / tick"], ["TICK INTERVAL", "0.13 sec"], ["DURATION", "0.87 sec"]],
@@ -5410,7 +6657,7 @@ function renderWeaponBook() {
   book.querySelector(".book-description").textContent = entry[1];
   const original = book.querySelector(`[data-${isSuper ? "super" : "weapon"}="${key}"] .projectile-preview`);
   const art = book.querySelector(".book-art");
-  art.replaceChildren(original.cloneNode(true));
+  if (original) art.replaceChildren(original.cloneNode(true));
   art.style.setProperty("--loadout-color", (isSuper ? SUPER_COLORS : WEAPON_COLORS)[key]);
   art.style.setProperty("--loadout-rgb", rgbString((isSuper ? SUPER_COLORS : WEAPON_COLORS)[key]));
   book.querySelector(".book-prev").disabled = !isSuper;
@@ -5424,6 +6671,8 @@ function setupWeaponBook() {
   book.querySelector("h2").textContent = "FLIGHT ARMORY";
   const extra = book.querySelector("[data-weapon='tech0']");
   book.querySelector(".gun-section .weapon-grid").append(extra);
+  const extraMagma = book.querySelector("[data-weapon='magma']");
+  book.querySelector(".gun-section .weapon-grid").append(extraMagma);
   document.getElementById("primary-more-toggle").hidden = true;
   book.insertAdjacentHTML("beforeend", `<div class="book-overview" aria-live="polite"><div class="book-copy"><p class="book-category"></p><h3 class="book-name"></h3><p class="book-kicker"></p><p class="book-description"></p><p class="book-stats"></p></div><div class="book-art" aria-hidden="true"></div></div><nav class="book-navigation" aria-label="Armory pages"><button class="book-prev" type="button" aria-label="Previous page: primary guns"><span class="page-chevron" aria-hidden="true"></span> GUNS</button><button class="book-next" type="button" aria-label="Next page: super attacks">SUPERS <span class="page-chevron" aria-hidden="true"></span></button></nav>`);
   book.querySelectorAll(".weapon-tile").forEach((tile) => {
@@ -5431,7 +6680,14 @@ function setupWeaponBook() {
     const label = WEAPON_LABELS[tile.dataset.weapon] || SUPER_LABELS[tile.dataset.super];
     tile.setAttribute("aria-label", label);
     tile.title = label;
-    tile.addEventListener("click", () => { bookPreview = tile.dataset.weapon || tile.dataset.super; bookDetailStats = false; renderWeaponBook(); });
+    // The page has to follow the tile. Setting only `bookPreview` left the book
+    // on the guns page looking for `[data-weapon="orb"]`, which is null.
+    tile.addEventListener("click", () => {
+      bookPage = tile.dataset.super ? "super" : "primary";
+      bookPreview = tile.dataset.weapon || tile.dataset.super;
+      bookDetailStats = false;
+      renderWeaponBook();
+    });
   });
   book.querySelectorAll(".book-navigation button").forEach((button) => button.addEventListener("click", () => {
     bookPage = button.classList.contains("book-next") ? "super" : "primary";
@@ -5494,10 +6750,9 @@ function refreshLoadoutUI() {
     item.classList.toggle("selected", value === selectedSuper);
     item.setAttribute("aria-pressed", String(value === selectedSuper));
   });
-  const readout = document.getElementById("loadout-readout");
-  const summary = document.getElementById("loadout-summary-text");
-  for (const target of [readout, summary]) {
-    if (!target) continue;
+  // Every readout, wherever it lives — the menu button, the armory footer and
+  // the FLIGHT ARMORY buttons on the reward and victory screens.
+  for (const target of document.querySelectorAll("[data-loadout-readout]")) {
     const weapon = document.createElement("span");
     const plus = document.createElement("span");
     const superName = document.createElement("span");
@@ -5559,14 +6814,14 @@ function setupHudLoadoutCards() {
 }
 setupHudLoadoutCards();
 
-function syncMercuryRewardUI() {
-  document.querySelectorAll("[data-mercury-locked]").forEach((item) => {
-    item.classList.toggle("locked", !mercuryRewardsUnlocked);
-    item.setAttribute("aria-disabled", String(!mercuryRewardsUnlocked));
+function syncMoonRewardUI() {
+  document.querySelectorAll("[data-moon-locked]").forEach((item) => {
+    item.classList.toggle("locked", !moonRewardsUnlocked);
+    item.setAttribute("aria-disabled", String(!moonRewardsUnlocked));
   });
   const greyChoice = document.querySelector(".color-choice.grey");
   if (greyChoice) {
-    greyChoice.setAttribute("aria-label", mercuryRewardsUnlocked ? "Grey" : "Grey ship locked: beat Mercury");
+    greyChoice.setAttribute("aria-label", moonRewardsUnlocked ? "Grey" : "Grey ship locked: beat the Moon");
   }
   syncRewardEquipButtons();
 }
@@ -5590,18 +6845,32 @@ function syncRewardEquipButtons() {
     grey.textContent = on ? "EQUIPPED" : "EQUIP";
     grey.setAttribute("aria-pressed", String(on));
   }
+  const magma = document.getElementById("reward-equip-magma");
+  if (magma) {
+    const on = selectedWeapon === "magma";
+    magma.classList.toggle("equipped", on);
+    magma.textContent = on ? "EQUIPPED" : "EQUIP";
+    magma.setAttribute("aria-pressed", String(on));
+  }
+  const magmaShip = document.getElementById("reward-equip-magma-ship");
+  if (magmaShip) {
+    const on = playerColor === MAGMA_SHIP_COLOR;
+    magmaShip.classList.toggle("equipped", on);
+    magmaShip.textContent = on ? "EQUIPPED" : "EQUIP";
+    magmaShip.setAttribute("aria-pressed", String(on));
+  }
 }
 
-function unlockMercuryRewards() {
-  if (!mercuryRewardsUnlocked) {
-    mercuryRewardsUnlocked = true;
+function unlockMoonRewards() {
+  if (!moonRewardsUnlocked) {
+    moonRewardsUnlocked = true;
     try {
-      localStorage.setItem(MERCURY_UNLOCK_KEY, "unlocked");
+      localStorage.setItem(MOON_UNLOCK_KEY, "unlocked");
     } catch (error) {
       // The reward still unlocks for this session when storage is unavailable.
     }
   }
-  syncMercuryRewardUI();
+  syncMoonRewardUI();
 }
 
 // Single place that applies a ship colour, so the menu swatches and the reward
@@ -5616,7 +6885,8 @@ function setPlayerColor(hex) {
 }
 
 function setSelectedWeapon(nextWeapon) {
-  if (nextWeapon === "tech0" && !mercuryRewardsUnlocked) return false;
+  if (nextWeapon === "tech0" && !moonRewardsUnlocked) return false;
+  if (nextWeapon === "magma" && !venusRewardsUnlocked) return false;
   selectedWeapon = nextWeapon;
   refreshLoadoutUI();
   syncRewardEquipButtons();
@@ -5624,7 +6894,34 @@ function setSelectedWeapon(nextWeapon) {
   return true;
 }
 
+function syncVenusRewardUI() {
+  document.querySelectorAll("[data-venus-locked]").forEach((item) => {
+    item.classList.toggle("locked", !venusRewardsUnlocked);
+    item.setAttribute("aria-disabled", String(!venusRewardsUnlocked));
+  });
+  // One swatch covers the Venus ship: plain red and the magma hex were within a
+  // point of each other, so two of them read as a duplicate, not as two rewards.
+  const redChoice = document.querySelector(".color-choice.red");
+  if (redChoice) {
+    redChoice.setAttribute("aria-label", venusRewardsUnlocked ? "Red" : "Red ship locked: beat Venus");
+  }
+  syncRewardEquipButtons();
+}
+
+function unlockVenusRewards() {
+  if (!venusRewardsUnlocked) {
+    venusRewardsUnlocked = true;
+    try {
+      localStorage.setItem(VENUS_UNLOCK_KEY, "unlocked");
+    } catch (error) {
+      // The reward still unlocks for this session when storage is unavailable.
+    }
+  }
+  syncVenusRewardUI();
+}
+
 function setSelectedSuper(nextSuper) {
+  if (superLocked(nextSuper)) return false;
   if (nextSuper !== selectedSuper && superMeter >= 1) {
     const requiredDamage = SUPER_COST[nextSuper] || 20;
     lastSuperKills = superDamage - requiredDamage * 0.5;
@@ -5633,6 +6930,7 @@ function setSelectedSuper(nextSuper) {
   refreshLoadoutUI();
   playSound(520, 0.06, "square");
   updateSuperMeter();
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -5686,7 +6984,17 @@ function ensureAudio() {
   try {
     const AudioCtor = window.AudioContext || window.webkitAudioContext;
     if (!AudioCtor) return null;
-    audioContext = new AudioCtor();
+    // "interactive" asks the platform for the smallest buffer it will give,
+    // which is the difference between a trigger that feels connected and one
+    // that feels laggy. The music sequencer schedules ahead and does not care.
+    // Older WebKit's `webkitAudioContext` predates the options argument, so a
+    // failure here falls back rather than taking the whole context down with
+    // it — silent music is a much worse bug than a slightly larger buffer.
+    try {
+      audioContext = new AudioCtor({ latencyHint: "interactive" });
+    } catch (error) {
+      audioContext = new AudioCtor();
+    }
     masterGain = audioContext.createGain();
     masterGain.gain.value = audioSettings.muted ? 0 : 1;
     masterGain.connect(audioContext.destination);
@@ -5696,11 +7004,47 @@ function ensureAudio() {
     musicGain = audioContext.createGain();
     musicGain.gain.value = 0;
     musicGain.connect(masterGain);
+    // Weapon fire is the only thing in the game that stacks five or six voices
+    // inside 100ms, so it gets its own limiter rather than eating headroom off
+    // the shared sfx bus. Fast attack to catch the transient, short release so
+    // it recovers between rounds instead of pumping the explosions with it.
+    //
+    // Its own try/catch on purpose. This block used to sit in the outer one,
+    // which meant a browser that choked on the compressor lost *every* sound in
+    // the game — music, explosions, menus — not just the gun. Nothing below the
+    // weapon bus is load-bearing, so it degrades to routing shots straight at
+    // the sfx bus instead.
+    try {
+      weaponBus = audioContext.createGain();
+      const weaponLimiter = audioContext.createDynamicsCompressor();
+      weaponLimiter.threshold.value = -18;
+      weaponLimiter.knee.value = 10;
+      weaponLimiter.ratio.value = 8;
+      weaponLimiter.attack.value = 0.002;
+      weaponLimiter.release.value = 0.12;
+      // One lowpass across every gun. Individual voices are already dark, but a
+      // single shelf on the bus is what guarantees no future weapon can be the
+      // shrill one — brightness is what makes a sound fired six times a second
+      // wear out its welcome, long before loudness does.
+      const weaponTone = audioContext.createBiquadFilter();
+      weaponTone.type = "lowpass";
+      weaponTone.frequency.value = 2600;
+      weaponTone.Q.value = 0.5;
+      weaponBus.connect(weaponTone).connect(weaponLimiter).connect(sfxGain);
+      softClipCurve = buildSoftClip();
+    } catch (error) {
+      weaponBus = sfxGain;
+      softClipCurve = null;
+    }
     // one second of white noise, reused by every drum hit
     noiseBuffer = audioContext.createBuffer(1, audioContext.sampleRate, audioContext.sampleRate);
     const data = noiseBuffer.getChannelData(0);
     for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
   } catch (error) {
+    // Every sound in the game goes silent from here, so it must not do that
+    // silently: a swallowed exception left no trace anywhere and made "I hear
+    // nothing" impossible to tell apart from a muted slider or a stale cache.
+    console.warn("Petros: audio unavailable, the game will run silent.", error);
     audioContext = null;
   }
   return audioContext;
@@ -5719,6 +7063,248 @@ function playSound(frequency, duration, type) {
   oscillator.stop(audioContext.currentTime + duration);
 }
 
+// ---------------------------------------------------------------------------
+// Weapon voices
+//
+// Every gun gets a synthesised report rather than a beep. They are built from
+// the same three ideas: a pitch that *falls* (an arcade shot is a downward
+// sweep, never a steady tone), an envelope with a real attack so nothing
+// clicks, and a filter that keeps the fizz out of the music.
+//
+// Rapid fire is the hard part, and it is a mixing problem, not a timbre one.
+// The blaster fires six times a second; a sound that is identical, centred and
+// un-ducked six times a second is exactly what makes a shooter exhausting to
+// listen to. Four things fix that, and they matter more than the waveforms do:
+//
+//   * every shot is detuned a few cents and re-levelled a few percent, so the
+//     ear never locks onto a repeating cycle;
+//   * the blaster alternates stereo sides in step with the wingtip that fired,
+//     so a held trigger reads as a rhythm across the field instead of one
+//     sound stuttering in the middle;
+//   * shots crowding inside ~140ms pull each other down (`shotLevel`), so the
+//     tenth round of a burst is quieter than the first;
+//   * the whole group runs through its own limiter, so a held trigger sits
+//     under the music rather than sawing through it.
+//
+// Latency: everything is scheduled at `currentTime` on an "interactive"
+// context, so a shot starts on the next render quantum (~3ms). There is no
+// lookahead here and there must not be — the music sequencer schedules ahead
+// because steady tempo needs it, and a trigger pull is the opposite problem.
+let weaponBus = null;
+let softClipCurve = null;
+let weaponVoices = 0;
+let lastShotAt = -1;
+// A cap, not a mixing control: the duck below is what actually keeps bursts in
+// line. This only exists so a pathological frame cannot open fifty oscillators.
+const MAX_WEAPON_VOICES = 16;
+// Hoisted because `weaponSfx.cone` runs inside the game loop, and the loop does
+// not allocate.
+const CONE_ARMS = [[-0.55, 990, 0], [0, 880, 0.012], [0.55, 810, 0.024]];
+
+function buildSoftClip() {
+  // tanh, normalised. Rounds the peak off the sub-heavy rounds so they read as
+  // weight rather than as a spike the limiter has to chase.
+  const curve = new Float32Array(1024);
+  const k = Math.tanh(2.2);
+  for (let i = 0; i < curve.length; i++) curve[i] = Math.tanh(((i / 1023) * 2 - 1) * 2.2) / k;
+  return curve;
+}
+
+// Level for one shot: quieter the more recently the last one went off, plus a
+// few percent of jitter so even a metronomic trigger is never twice the same.
+function shotLevel(base) {
+  const now = audioContext.currentTime;
+  const gap = lastShotAt < 0 ? 1 : now - lastShotAt;
+  lastShotAt = now;
+  const crowd = gap < 0.14 ? 0.62 + gap * 2.71 : 1;
+  return base * crowd * (0.9 + Math.random() * 0.2);
+}
+
+function beginShot() {
+  if (!audioContext || !weaponBus || weaponVoices >= MAX_WEAPON_VOICES) return false;
+  weaponVoices++;
+  setTimeout(() => { weaponVoices--; }, 500);
+  return true;
+}
+
+// Panning is per shot, so the node is per shot too. Safari only grew
+// StereoPannerNode in 14.1; without it the shot just plays centred.
+function weaponOut(pan) {
+  if (!pan || !audioContext.createStereoPanner) return weaponBus;
+  const panner = audioContext.createStereoPanner();
+  panner.pan.value = pan;
+  panner.connect(weaponBus);
+  return panner;
+}
+
+// exponentialRampToValueAtTime cannot reach zero, and starting from zero is
+// what clicks — hence 0.0001 at both ends and a couple of ms of attack.
+function shotEnv(gain, t, peak, attack, decay) {
+  gain.gain.setValueAtTime(0.0001, t);
+  gain.gain.exponentialRampToValueAtTime(peak, t + attack);
+  gain.gain.exponentialRampToValueAtTime(0.0001, t + attack + decay);
+}
+
+function shotTone(type, from, to, t, dur, peak, dest, detune = 0) {
+  const osc = audioContext.createOscillator();
+  const gain = audioContext.createGain();
+  osc.type = type;
+  osc.detune.value = detune;
+  osc.frequency.setValueAtTime(from, t);
+  osc.frequency.exponentialRampToValueAtTime(Math.max(20, to), t + dur);
+  shotEnv(gain, t, peak, Math.min(0.004, dur * 0.12), dur);
+  osc.connect(gain).connect(dest);
+  osc.start(t);
+  osc.stop(t + dur + 0.03);
+}
+
+// The shared one-second noise buffer, read from a random offset so repeated
+// hits never replay the same slice of noise.
+function shotNoise(t, dur, peak, dest, filterType, from, to, q = 1) {
+  if (!noiseBuffer) return;
+  const source = audioContext.createBufferSource();
+  source.buffer = noiseBuffer;
+  const filter = audioContext.createBiquadFilter();
+  filter.type = filterType;
+  filter.frequency.setValueAtTime(from, t);
+  filter.frequency.exponentialRampToValueAtTime(Math.max(40, to), t + dur);
+  filter.Q.value = q;
+  const gain = audioContext.createGain();
+  shotEnv(gain, t, peak, 0.002, dur);
+  source.connect(filter).connect(gain).connect(dest);
+  source.start(t, Math.random() * 0.5);
+  source.stop(t + dur + 0.03);
+}
+
+// The soft clip is a nicety, not a requirement: if the curve could not be built
+// the sub-heavy rounds just run clean into the bus.
+function shaperOut() {
+  if (!softClipCurve) return weaponBus;
+  const shaper = audioContext.createWaveShaper();
+  shaper.curve = softClipCurve;
+  shaper.connect(weaponBus);
+  return shaper;
+}
+
+function sweepFilter(type, from, to, t, dur, dest, q = 0.9) {
+  const filter = audioContext.createBiquadFilter();
+  filter.type = type;
+  filter.frequency.setValueAtTime(from, t);
+  filter.frequency.exponentialRampToValueAtTime(Math.max(40, to), t + dur);
+  filter.Q.value = q;
+  filter.connect(dest);
+  return filter;
+}
+
+const weaponSfx = {
+  // Heard more than everything else in the game combined, so it is deliberately
+  // the quietest thing here: a soft triangle blip over a sine an octave down,
+  // no noise layer at all, and a top end kept under 800Hz. Square waves and a
+  // bright noise transient were the first attempt and they read as harsh
+  // within about ten seconds of holding the trigger.
+  blaster(barrel) {
+    if (!beginShot()) return;
+    const t = audioContext.currentTime;
+    const level = shotLevel(0.034);
+    const out = weaponOut(barrel * 0.34);
+    const lp = sweepFilter("lowpass", 1700, 520, t, 0.075, out);
+    const cents = Math.random() * 40 - 20 + barrel * 22;
+    shotTone("triangle", 760, 235, t, 0.075, level, lp, cents);
+    shotTone("sine", 380, 118, t, 0.09, level * 0.6, lp, cents);
+  },
+
+  // Three arms, three sides of the field, 12ms apart: the ear fuses that into
+  // one wide report rather than three beeps. Triangles rather than saws, and
+  // the noise that used to sit under it is gone — with three of them landing
+  // together it was the sharpest thing in the game.
+  cone() {
+    if (!beginShot()) return;
+    const t = audioContext.currentTime;
+    const level = shotLevel(0.018);
+    for (let i = 0; i < CONE_ARMS.length; i++) {
+      const pan = CONE_ARMS[i][0];
+      const freq = CONE_ARMS[i][1] * 0.72;
+      const at = t + CONE_ARMS[i][2];
+      const lp = sweepFilter("lowpass", 1600, 480, at, 0.08, weaponOut(pan));
+      shotTone("triangle", freq, freq * 0.3, at, 0.08, level, lp, Math.random() * 30 - 15);
+      shotTone("sine", freq * 0.5, freq * 0.16, at, 0.09, level * 0.5, lp);
+    }
+  },
+
+  // Three tiers, and they still have to be audibly three — the whole weapon is
+  // a bet on how long you held the key. The difference is carried by weight and
+  // length now rather than by brightness: tier 5 is the only player sound with
+  // real low end, but it gets there with a sub, not with a crack off the top.
+  charge(damage) {
+    if (!beginShot()) return;
+    const t = audioContext.currentTime;
+    if (damage >= 5) {
+      const level = shotLevel(0.009);
+      const shaper = shaperOut();
+      const lp = sweepFilter("lowpass", 1500, 260, t, 0.36, shaper);
+      shotTone("triangle", 320, 62, t, 0.36, level, lp, -7);
+      shotTone("triangle", 320, 62, t, 0.36, level * 0.8, lp, 7);
+      shotTone("sine", 110, 34, t, 0.44, level * 0.3, shaper);
+      shotNoise(t, 0.24, level * 0.22, lp, "lowpass", 900, 220);
+    } else if (damage >= 3) {
+      const level = shotLevel(0.0123);
+      const lp = sweepFilter("lowpass", 1500, 420, t, 0.22, weaponBus);
+      shotTone("triangle", 430, 115, t, 0.22, level, lp, -6);
+      shotTone("triangle", 430, 115, t, 0.22, level * 0.8, lp, 6);
+      shotTone("sine", 140, 54, t, 0.26, level * 0.6, weaponBus);
+    } else {
+      const level = shotLevel(0.023);
+      const lp = sweepFilter("lowpass", 1500, 500, t, 0.11, weaponBus);
+      shotTone("triangle", 540, 190, t, 0.11, level, lp, Math.random() * 30 - 15);
+      shotTone("sine", 270, 95, t, 0.1, level * 0.5, lp);
+    }
+  },
+
+  // Still electric — a square modulating another square's frequency is what
+  // separates "lightning" from "note" — but at a third of the old modulation
+  // depth and with the bandpass an octave lower. The bright ping and the noise
+  // crack that sat on top of it are gone; they were the whole problem.
+  tech0() {
+    if (!beginShot()) return;
+    const t = audioContext.currentTime;
+    const level = shotLevel(0.042);
+    const bp = sweepFilter("bandpass", 1100, 420, t, 0.15, weaponBus, 1.6);
+    const carrier = audioContext.createOscillator();
+    carrier.type = "square";
+    carrier.frequency.setValueAtTime(430, t);
+    carrier.frequency.exponentialRampToValueAtTime(175, t + 0.15);
+    const modulator = audioContext.createOscillator();
+    modulator.type = "triangle";
+    modulator.frequency.value = 95 + Math.random() * 70;
+    const modDepth = audioContext.createGain();
+    modDepth.gain.setValueAtTime(300, t);
+    modDepth.gain.exponentialRampToValueAtTime(30, t + 0.15);
+    modulator.connect(modDepth).connect(carrier.frequency);
+    const gain = audioContext.createGain();
+    shotEnv(gain, t, level, 0.004, 0.15);
+    carrier.connect(gain).connect(bp);
+    carrier.start(t);
+    carrier.stop(t + 0.19);
+    modulator.start(t);
+    modulator.stop(t + 0.19);
+    shotTone("sine", 620, 260, t, 0.09, level * 0.35, weaponBus);
+  },
+
+  // A mortar, felt rather than heard: sub sine doing the work, a soft noise
+  // body well under 700Hz, and no transient on top. Slow enough to fire that it
+  // can afford the longest tail of any gun without wearing out its welcome.
+  magma() {
+    if (!beginShot()) return;
+    const t = audioContext.currentTime;
+    const level = shotLevel(0.01);
+    const shaper = shaperOut();
+    shotTone("sine", 180, 34, t, 0.4, level * 0.45, shaper);
+    const lp = sweepFilter("lowpass", 520, 160, t, 0.24, shaper);
+    shotTone("triangle", 130, 46, t, 0.24, level * 0.5, lp);
+    shotNoise(t, 0.3, level * 0.4, shaper, "lowpass", 700, 150);
+  },
+};
+
 const music = (function () {
   const LOOKAHEAD_MS = 25;
   const SCHEDULE_AHEAD = 0.14;
@@ -5727,6 +7313,16 @@ const music = (function () {
   // Patterns are 16 steps to the bar, in MIDI note numbers; 0 is a rest and a
   // bar list cycles, so a four-bar loop costs four short arrays.
   const TRACKS = {
+    // A short, drum-less fanfare for the title card — loops if the player
+    // lingers there, then crossfades into `menu` once finishCredits() runs.
+    intro: {
+      bpm: 100,
+      volume: 0.15,
+      bass: [[36, 0, 0, 0, 41, 0, 0, 0, 43, 0, 0, 0, 41, 0, 0, 0]],
+      arp:  [[60, 64, 67, 72, 76, 72, 67, 64, 60, 64, 67, 72, 76, 79, 76, 72]],
+      lead: [[0, 0, 0, 0, 0, 0, 0, 0, 79, 0, 0, 0, 84, 0, 0, 0]],
+      kick: [], snare: [], hat: [],
+    },
     menu: {
       bpm: 92,
       volume: 0.16,
@@ -5964,7 +7560,7 @@ const music = (function () {
     return track.volume * audioSettings.music * (ducked ? 0.28 : 1);
   }
 
-  function play(name) {
+  function play(name, fadeSeconds = 0.6) {
     if (!ensureAudio()) return;
     if (audioContext.state === "suspended") audioContext.resume();
     if (trackName === name && timer) return;
@@ -5974,7 +7570,7 @@ const music = (function () {
     if (!track) { stop(); return; }
     step = 0;
     nextStepTime = audioContext.currentTime + 0.06;
-    fade(targetVolume(), 0.6);
+    fade(targetVolume(), fadeSeconds);
     timer = setInterval(tick, LOOKAHEAD_MS);
     tick();
   }
@@ -6023,7 +7619,18 @@ function fireInDirection(dx, dy, damage = 1, type = "basic", size = 3) {
     : type === "charge" && damage >= 3 ? 3
     : 1;
   const color = weaponColor(type === "basic" ? "blaster" : type);
-  bullets.push({ x: player.x, y: player.y, vx: dx * 10, vy: dy * 10, damage, type, size, pierceRemaining, color });
+  // The blaster alternates wingtips. Firing everything from one point looked
+  // like the rounds were falling out of the middle of the hull; a held trigger
+  // now has a left-right rhythm, and the flash follows the barrel that fired.
+  let ox = 0;
+  let oy = 0;
+  if (type === "basic") {
+    blasterBarrel = -blasterBarrel;
+    ox = -dy * BLASTER_BARREL_OFFSET * blasterBarrel;
+    oy = dx * BLASTER_BARREL_OFFSET * blasterBarrel;
+  }
+  bullets.push({ x: player.x + ox, y: player.y + oy, vx: dx * 10, vy: dy * 10, damage, type, size, pierceRemaining, color });
+  spawnMuzzleFlash(dx, dy, type, type === "charge" ? 0.7 + size * 0.09 : type === "magma" ? 1.25 : 1, ox, oy);
   return true;
 }
 
@@ -6041,6 +7648,7 @@ function releaseChargeShot(dirX, dirY, continueCharging = false) {
   let fired = false;
   if (!player.shrunk || fireCooldown <= 0) {
     fired = fireInDirection(dirX, dirY, damage, "charge", size);
+    if (fired) weaponSfx.charge(damage);
     if (player.shrunk && fired) fireCooldown = 45;
   }
   const length = Math.hypot(dirX, dirY) || 1;
@@ -6092,6 +7700,512 @@ function activateSuper() {
   return true;
 }
 
+// Magma splashes. When the slug lands it bursts into droplets that spray back
+// and sideways from the impact, each a 1-damage round with a short fuse. The
+// droplets ignore whatever they splashed off (`ignore`), so the primary target
+// is never double-billed — they exist to rake its neighbours. Shared by waves,
+// bosses and the test room so every arena splashes the same way.
+function burstMagma(bullet, x, y, target) {
+  const back = Math.atan2(-bullet.vy, -bullet.vx);
+  for (let i = 0; i < MAGMA_DROPS && bullets.length < MAGMA_DROP_CAP; i++) {
+    const angle = back + (i / (MAGMA_DROPS - 1) - 0.5) * 3.4 + rand(-0.15, 0.15);
+    const speed = MAGMA_DROP_SPEED * rand(0.75, 1.15);
+    bullets.push({
+      x, y, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
+      damage: 1, type: "magmaDrop", size: 6, pierceRemaining: 1,
+      color: WEAPON_COLORS.magma, life: MAGMA_DROP_LIFE, maxLife: MAGMA_DROP_LIFE, ignore: target,
+    });
+  }
+  // A quick, quiet flash ring — the bomb blast's renderer at a fraction of the
+  // size and life, with no screen shake, so a routine primary-weapon impact
+  // reads as a burst without hammering the screen every 0.5s.
+  const rays = [];
+  for (let i = 0; i < 10; i++) rays.push({ angle: rand(0, Math.PI * 2), reach: rand(0.7, 1.05), width: rand(1.5, 3.2) });
+  bombBlasts.push({ x, y, radius: 40, color: "#ff7a2a", life: 16, maxLife: 16, rays });
+  spawnSparks(x, y, 14, "#ffb03a", { minSpeed: 1.4, maxSpeed: 5.5, life: 18, minSize: 2, maxSize: 4 });
+  spawnSparks(x, y, 7, "#fff3d6", { minSpeed: 0.6, maxSpeed: 3, life: 12, maxSize: 3 });
+  spawnSparks(x, y, 8, "#3a1a10", { minSpeed: 1.5, maxSpeed: 4.5, life: 24, maxSize: 3, gravity: 0.08 });
+  playSound(80, 0.14, "triangle");
+  playSound(420, 0.05, "sawtooth");
+}
+
+// --- Magma splatter -------------------------------------------------------
+// The round is not an orb with a halo — a radial glow sprite stuck to a bullet
+// read as a lens flare, which is what it looked like. It is a thrown splat of
+// lava: a lobed, wobbling blob that runs from a dull crust rim through orange
+// to a white-hot centre, with black crust chips floating on it and hot specks
+// flung off the edge. The silhouette is traced from fixed lobe tables through
+// two scratch arrays, so a splat allocates nothing and can be layered cheaply.
+const MAGMA_LOBES = 9;
+const MAGMA_LOBE_R = [1.0, 0.72, 1.18, 0.84, 1.08, 0.66, 1.22, 0.9, 0.78];
+const MAGMA_LOBE_PH = [0.0, 1.9, 3.4, 0.8, 4.7, 2.3, 5.6, 1.2, 3.9];
+const magmaBlobX = new Float64Array(MAGMA_LOBES);
+const magmaBlobY = new Float64Array(MAGMA_LOBES);
+// Crust chips riding on the melt: angle, distance and size, all in radii.
+const MAGMA_CHIP_A = [0.9, 3.4, 5.2];
+const MAGMA_CHIP_D = [0.62, 0.72, 0.58];
+const MAGMA_CHIP_S = [0.2, 0.14, 0.17];
+// Specks flung off the edge, same units.
+const MAGMA_FLECK_A = [0.4, 1.7, 2.9, 4.1, 5.3];
+const MAGMA_FLECK_D = [1.5, 1.85, 1.35, 1.68, 1.95];
+const MAGMA_FLECK_S = [0.17, 0.1, 0.22, 0.13, 0.09];
+
+// Traces the closed splat outline at `radius`, smoothing the lobe corners with
+// quadratics through their midpoints. `seed` shifts the wobble per bullet so no
+// two slugs pulse in lockstep; `wobble` is how far the lobes breathe, and
+// `bias` (0-1) mixes the lobe table back toward a circle — the outer heat
+// layers want a soft edge, or the spikes read as a dark star rather than heat.
+function magmaBlobPath(radius, seed, t, wobble, bias) {
+  for (let i = 0; i < MAGMA_LOBES; i++) {
+    const a = (i / MAGMA_LOBES) * Math.PI * 2;
+    const r = radius * (1 + (MAGMA_LOBE_R[i] - 1) * bias) * (1 + Math.sin(t * 0.006 + MAGMA_LOBE_PH[i] + seed) * wobble);
+    magmaBlobX[i] = Math.cos(a) * r;
+    magmaBlobY[i] = Math.sin(a) * r;
+  }
+  ctx.beginPath();
+  ctx.moveTo((magmaBlobX[MAGMA_LOBES - 1] + magmaBlobX[0]) / 2, (magmaBlobY[MAGMA_LOBES - 1] + magmaBlobY[0]) / 2);
+  for (let i = 0; i < MAGMA_LOBES; i++) {
+    const j = (i + 1) % MAGMA_LOBES;
+    ctx.quadraticCurveTo(magmaBlobX[i], magmaBlobY[i], (magmaBlobX[i] + magmaBlobX[j]) / 2, (magmaBlobY[i] + magmaBlobY[j]) / 2);
+  }
+  ctx.closePath();
+}
+
+function magmaBlobFill(radius, seed, t, wobble, bias, color, ox, oy) {
+  ctx.save();
+  ctx.translate(ox, oy);
+  ctx.fillStyle = color;
+  magmaBlobPath(radius, seed, t, wobble, bias);
+  ctx.fill();
+  ctx.restore();
+}
+
+// One splat, centred on the bullet and stretched slightly along its travel
+// axis (local -y). Every layer gets its own seed so the lobes never stack into
+// a circle. `chips` adds the floating crust — the slug has it, droplets don't.
+function drawMagmaSplat(radius, seed, t, alpha, chips) {
+  ctx.save();
+  ctx.scale(0.94, 1.1);
+  ctx.globalAlpha = alpha;
+  // heat bleeding off the melt
+  ctx.globalCompositeOperation = "lighter";
+  magmaBlobFill(radius * 1.5, seed, t, 0.12, 0.4, "#6b1604", 0, radius * 0.1);
+  ctx.globalCompositeOperation = "source-over";
+  // cooling rim → body → hot centre, each pulled a little toward the leading edge
+  magmaBlobFill(radius * 1.18, seed + 1.7, t, 0.16, 0.7, "#b82a09", 0, radius * 0.06);
+  magmaBlobFill(radius, seed + 3.4, t, 0.19, 1, "#ff5a12", 0, 0);
+  magmaBlobFill(radius * 0.66, seed + 0.9, t, 0.16, 0.85, "#ff9c1e", 0, -radius * 0.1);
+  magmaBlobFill(radius * 0.36, seed + 5.1, t, 0.14, 0.7, "#ffd66a", 0, -radius * 0.14);
+  ctx.beginPath();
+  ctx.arc(0, -radius * 0.16, radius * 0.15, 0, Math.PI * 2);
+  ctx.fillStyle = "#fff3d6";
+  ctx.fill();
+  if (chips) {
+    ctx.fillStyle = "#3a1a12";
+    for (let i = 0; i < MAGMA_CHIP_A.length; i++) {
+      const a = MAGMA_CHIP_A[i] + t * 0.0012 + seed;
+      magmaBlobFill(radius * MAGMA_CHIP_S[i], seed + i * 2.1, t, 0.3, 1,
+        "#3a1a12", Math.cos(a) * radius * MAGMA_CHIP_D[i], Math.sin(a) * radius * MAGMA_CHIP_D[i]);
+    }
+  }
+  if (quality.particles > 0.3) {
+    for (let i = 0; i < MAGMA_FLECK_A.length; i++) {
+      const wob = Math.sin(t * 0.005 + MAGMA_FLECK_A[i] * 2 + seed);
+      const a = MAGMA_FLECK_A[i] + t * 0.0006 + seed * 0.2;
+      const d = radius * MAGMA_FLECK_D[i] * (1 + wob * 0.14);
+      const r = radius * MAGMA_FLECK_S[i] * (0.85 + wob * 0.15);
+      const x = Math.cos(a) * d;
+      const y = Math.sin(a) * d;
+      ctx.fillStyle = "#ff7a2a";
+      ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "#ffd66a";
+      ctx.beginPath(); ctx.arc(x, y, r * 0.45, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+  ctx.globalAlpha = 1;
+  ctx.restore();
+}
+
+// The slug: a splat of lava with a dripping tail, tumbling as it flies. Drawn
+// in the bullet's local frame, where -y is the direction of travel.
+function drawMagmaSlug(bullet, color) {
+  const now = performance.now();
+  const pulse = 0.6 + Math.sin(now * 0.02 + bullet.x * 0.05) * 0.4;
+  const s = bullet.size;
+  if (bullet.seed === undefined) bullet.seed = (bullet.x * 0.017 + bullet.y * 0.023) % 6.28;
+  bullet.tick = (bullet.tick || 0) + 1;
+  // the drip it leaves behind, thrown back along the travel axis
+  ctx.globalCompositeOperation = "lighter";
+  ctx.globalAlpha = 0.6;
+  ctx.fillStyle = "#c22a12";
+  ctx.beginPath();
+  ctx.moveTo(-s * 0.5, s * 0.3);
+  ctx.quadraticCurveTo(-s * 0.3, s + 10, 0, s + 18 + pulse * 8);
+  ctx.quadraticCurveTo(s * 0.3, s + 10, s * 0.5, s * 0.3);
+  ctx.closePath(); ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = "source-over";
+  if (bullet.tick % 2 === 0) {
+    spawnSparks(bullet.x - bullet.vx * 0.6, bullet.y - bullet.vy * 0.6, 1, Math.random() < 0.6 ? "#ff7a2a" : "#ffb03a",
+      { minSpeed: 0.15, maxSpeed: 1, life: 20, minSize: 2, maxSize: 4, gravity: 0.05 });
+  }
+  drawMagmaSplat(s * 1.05 + pulse * 0.6, bullet.seed, now, 1, true);
+}
+
+// A splash droplet: a smaller splat that shrinks, dims and sizzles out.
+function drawMagmaDrop(bullet, color) {
+  bullet.life--;
+  if (bullet.life <= 0) { bullet.y = -100; return; }
+  bullet.vx *= 0.95;
+  bullet.vy *= 0.95;
+  const fade = bullet.life / bullet.maxLife;
+  if (bullet.seed === undefined) bullet.seed = (bullet.x * 0.017 + bullet.y * 0.023) % 6.28;
+  drawMagmaSplat(bullet.size * (0.45 + fade * 0.5), bullet.seed, performance.now(), 0.45 + fade * 0.55, false);
+  if (bullet.life % 4 === 0) spawnSparks(bullet.x, bullet.y, 1, "#ffb03a", { minSpeed: 0.15, maxSpeed: 0.7, life: 10, minSize: 2, maxSize: 3 });
+}
+
+// --- Muzzle flashes --------------------------------------------------------
+// Rounds used to appear out of nothing at the ship's centre. A flash pinned to
+// the nose for a few frames gives every shot a source, and since it is drawn in
+// the weapon's own colour it also tells you at a glance what is equipped.
+// Pooled: `compact()` prunes it, and the draw loop never allocates.
+function spawnMuzzleFlash(dx, dy, type, scale = 1, ox = 0, oy = 0) {
+  if (!quality.glow && quality.particles < 0.3) return;
+  const color = weaponColor(type === "basic" ? "blaster" : type);
+  const last = muzzleFlashes[muzzleFlashes.length - 1];
+  // The cone fires three rounds in one press: widen the flash it already made
+  // instead of stacking three of them on the same pixel.
+  if (last && last.life === last.maxLife && last.color === color) {
+    last.spread = Math.min(0.8, last.spread + 0.14);
+    return;
+  }
+  if (muzzleFlashes.length >= MAX_MUZZLE_FLASHES) return;
+  const life = type === "charge" || type === "magma" ? 10 : 7;
+  muzzleFlashes.push({
+    x: player.x + dx * 12 + ox, y: player.y + dy * 12 + oy, angle: Math.atan2(dy, dx),
+    color, life, maxLife: life, scale, spread: 0.42,
+  });
+}
+
+// A four-point star of light at the barrel: a long spike down the firing line,
+// short side spikes and a white core, all additive and gone within ~0.1s. A
+// plain wedge was tried first and read as a dull khaki trapezoid — flat colour
+// at low alpha over the backdrop never looks like a flash; short and bright
+// does. `spread` widens the star when a burst weapon fires several rounds.
+function updateMuzzleFlashes() {
+  for (const flash of muzzleFlashes) {
+    flash.life--;
+    const fade = Math.max(0, flash.life / flash.maxLife);
+    const grow = 1 - fade;
+    const reach = (19 + 11 * grow) * flash.scale * (0.7 + 0.3 * fade);
+    const side = reach * (0.26 + flash.spread * 0.34);
+    ctx.save();
+    ctx.translate(flash.x, flash.y);
+    ctx.rotate(flash.angle);
+    ctx.globalCompositeOperation = "lighter";
+    ctx.globalAlpha = 0.85 * fade;
+    ctx.fillStyle = flash.color;
+    ctx.beginPath();
+    ctx.moveTo(reach, 0);
+    ctx.quadraticCurveTo(reach * 0.3, -side * 0.5, 0, -side);
+    ctx.quadraticCurveTo(-reach * 0.2, -side * 0.35, -reach * 0.45, 0);
+    ctx.quadraticCurveTo(-reach * 0.2, side * 0.35, 0, side);
+    ctx.quadraticCurveTo(reach * 0.3, side * 0.5, reach, 0);
+    ctx.closePath(); ctx.fill();
+    ctx.globalAlpha = fade;
+    ctx.fillStyle = "#ffffff";
+    ctx.beginPath();
+    ctx.moveTo(reach * 0.55, 0);
+    ctx.quadraticCurveTo(reach * 0.12, -side * 0.28, 0, -side * 0.5);
+    ctx.quadraticCurveTo(-reach * 0.1, -side * 0.2, -reach * 0.2, 0);
+    ctx.quadraticCurveTo(-reach * 0.1, side * 0.2, 0, side * 0.5);
+    ctx.quadraticCurveTo(reach * 0.12, side * 0.28, reach * 0.55, 0);
+    ctx.closePath(); ctx.fill();
+    // the shock ring pushing out of the barrel
+    ctx.globalAlpha = 0.45 * fade;
+    ctx.strokeStyle = flash.color;
+    ctx.lineWidth = 1.4 * fade + 0.4;
+    ctx.beginPath();
+    ctx.arc(0, 0, (4 + 11 * grow) * flash.scale, -1.1, 1.1);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = "source-over";
+    ctx.restore();
+  }
+  compact(muzzleFlashes, (f) => f.life > 0);
+}
+
+// --- Player round rendering -----------------------------------------------
+// Every primary gun draws in the bullet's local frame, where -y is the way it
+// is travelling. Shared vocabulary, so the four guns read as one armoury:
+// a tapered additive tracer behind the round, a dark rim under the body so the
+// shape survives over a lit backdrop, and a white-hot centre. No `shadowBlur`,
+// no per-frame gradients — everything here is flat fills over baked tables.
+
+// The rim under each round. A weapon's own hue at ~25% luminance beats black:
+// the silhouette stays legible without a hole punched in the middle of it.
+const BULLET_RIM = { blaster: "#5a3d00", cone: "#0a4a26", charge: "#8a3a05", tech0: "#083f4a" };
+
+// A tapered tracer streaming off the back of a round: two additive quads, the
+// inner one shorter and hotter, so the round looks like it is moving even in a
+// still frame. `len` and `half` are in local pixels.
+function drawBulletTracer(len, half, color, alpha) {
+  ctx.globalCompositeOperation = "lighter";
+  ctx.globalAlpha = alpha * 0.55;
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(-half, 0);
+  ctx.quadraticCurveTo(-half * 0.5, len * 0.6, 0, len);
+  ctx.quadraticCurveTo(half * 0.5, len * 0.6, half, 0);
+  ctx.closePath(); ctx.fill();
+  ctx.globalAlpha = alpha * 0.75;
+  ctx.fillStyle = "#ffffff";
+  ctx.beginPath();
+  ctx.moveTo(-half * 0.42, 0);
+  ctx.quadraticCurveTo(-half * 0.2, len * 0.32, 0, len * 0.55);
+  ctx.quadraticCurveTo(half * 0.2, len * 0.32, half * 0.42, 0);
+  ctx.closePath(); ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = "source-over";
+}
+
+// A capsule — a bar with semicircular caps — traced at the origin along the
+// travel axis. The blaster and cone icons are both rounded bars, so their
+// rounds are too: the thing in flight has to be the thing on the tile.
+function capsulePath(halfW, halfH) {
+  ctx.beginPath();
+  ctx.arc(0, -halfH + halfW, halfW, Math.PI, 0);
+  ctx.lineTo(halfW, halfH - halfW);
+  ctx.arc(0, halfH - halfW, halfW, 0, Math.PI);
+  ctx.closePath();
+}
+
+// The blaster round: the icon's glowing bar, built up in layers. It keeps that
+// silhouette exactly — what makes it read as fast is three shrinking
+// afterimages strung out behind it, which cost three fills and sell speed far
+// better than making the bar itself longer.
+function drawBlasterBolt(bullet, color) {
+  const t = performance.now();
+  const s = bullet.size;
+  const pulse = 0.85 + Math.sin(t * 0.05 + bullet.x * 0.06 + bullet.y * 0.04) * 0.15;
+  const halfW = s * 1.15;
+  const halfH = s * 3.6;
+  ctx.globalCompositeOperation = "lighter";
+  ctx.fillStyle = color;
+  for (let i = 3; i >= 1; i--) {
+    ctx.globalAlpha = 0.46 / i;
+    ctx.save();
+    ctx.translate(0, halfH * 0.75 * i);
+    capsulePath(halfW * (1 - i * 0.16), halfH * (1 - i * 0.18));
+    ctx.fill();
+    ctx.restore();
+  }
+  // the icon's box-shadow, as a soft additive bloom around the bar
+  ctx.globalAlpha = 0.14;
+  ctx.beginPath(); ctx.ellipse(0, 0, halfW * 1.7, halfH * 1.08 * pulse, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = "source-over";
+  ctx.fillStyle = BULLET_RIM.blaster;
+  capsulePath(halfW * 1.25, halfH * 1.08); ctx.fill();
+  ctx.fillStyle = color;
+  capsulePath(halfW, halfH); ctx.fill();
+  ctx.fillStyle = "#fff8d8";
+  capsulePath(halfW * 0.42, halfH * 0.72); ctx.fill();
+  ctx.globalCompositeOperation = "lighter";
+  ctx.fillStyle = "#ffffff";
+  ctx.beginPath(); ctx.arc(0, -halfH + halfW, halfW * 0.75 * pulse, 0, Math.PI * 2); ctx.fill();
+  ctx.globalCompositeOperation = "source-over";
+}
+
+// The cone round: the icon's three stubby bars, so each shot is one short
+// capsule — no barbs, no fins. Only the brightness breathes, on its own phase,
+// so a fan of three shimmers instead of looking stamped.
+function drawConeShard(bullet, color) {
+  const t = performance.now();
+  const s = bullet.size;
+  if (bullet.seed === undefined) bullet.seed = (bullet.x * 0.031 + bullet.y * 0.017) % 6.28;
+  const pulse = 0.85 + Math.sin(t * 0.04 + bullet.seed) * 0.15;
+  const halfW = s * 1.05;
+  const halfH = s * 2.35;
+  ctx.globalCompositeOperation = "lighter";
+  ctx.fillStyle = color;
+  for (let i = 2; i >= 1; i--) {
+    ctx.globalAlpha = 0.4 / i;
+    ctx.save();
+    ctx.translate(0, halfH * 0.8 * i);
+    capsulePath(halfW * (1 - i * 0.2), halfH * (1 - i * 0.22));
+    ctx.fill();
+    ctx.restore();
+  }
+  ctx.globalAlpha = 0.16 * pulse;
+  ctx.beginPath(); ctx.ellipse(0, 0, halfW * 2.2, halfH * 1.35, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = "source-over";
+  ctx.fillStyle = BULLET_RIM.cone;
+  capsulePath(halfW * 1.3, halfH * 1.12); ctx.fill();
+  ctx.fillStyle = color;
+  capsulePath(halfW, halfH); ctx.fill();
+  ctx.fillStyle = "#f2fff6";
+  capsulePath(halfW * 0.4, halfH * 0.66); ctx.fill();
+  ctx.globalCompositeOperation = "lighter";
+  ctx.globalAlpha = pulse;
+  ctx.fillStyle = "#ffffff";
+  ctx.beginPath(); ctx.arc(0, -halfH + halfW, halfW * 0.7, 0, Math.PI * 2); ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = "source-over";
+}
+
+// The charge round: a plasma ball whose size already scales 3→9 with hold time,
+// so the render scales with it too. Every extra ring of damage is visible —
+// a wider halo, a second orbit ring, and at pierce strength (>=3) a rotating
+// dashed containment ring — so you can see what a full-hold shot bought you.
+function drawChargeOrb(bullet, color) {
+  const t = performance.now();
+  const s = bullet.size;
+  const dmg = bullet.damage || 1;
+  const hot = dmg >= 4;
+  const pulse = 0.86 + Math.sin(t * 0.02 + bullet.x * 0.05) * 0.14;
+  if (bullet.seed === undefined) bullet.seed = (bullet.x * 0.021 + bullet.y * 0.019) % 6.28;
+  if (hot) {
+    const flicker = 0.82 + Math.sin(t * 0.035 + bullet.x * 0.07 + bullet.y * 0.04) * 0.18;
+    ctx.globalCompositeOperation = "lighter";
+    ctx.fillStyle = "#ff3f20";
+    ctx.globalAlpha = 0.72;
+    ctx.beginPath();
+    ctx.moveTo(-s * 0.82, s * 0.2);
+    ctx.quadraticCurveTo(-s * 0.62, s + 10, 0, s + 30 * flicker);
+    ctx.quadraticCurveTo(s * 0.62, s + 10, s * 0.82, s * 0.2);
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle = "#ffdc5a";
+    ctx.globalAlpha = 0.9;
+    ctx.beginPath();
+    ctx.moveTo(-s * 0.48, s * 0.1);
+    ctx.quadraticCurveTo(-s * 0.28, s + 6, 0, s + 19 * flicker);
+    ctx.quadraticCurveTo(s * 0.28, s + 6, s * 0.48, s * 0.1);
+    ctx.closePath(); ctx.fill();
+    ctx.globalCompositeOperation = "source-over";
+    ctx.globalAlpha = 1;
+  } else {
+    drawBulletTracer(11 + s, s * 0.8, color, 0.8);
+  }
+  // halo, body, hot centre — the centre sits forward so the ball has a nose
+  ctx.globalCompositeOperation = "lighter";
+  // two soft steps rather than one disc — a single additive circle drew a hard
+  // brown ring around the ball instead of reading as heat falling off
+  ctx.globalAlpha = 0.1;
+  ctx.fillStyle = color;
+  ctx.beginPath(); ctx.arc(0, 0, s * 2.4 * pulse, 0, Math.PI * 2); ctx.fill();
+  ctx.globalAlpha = 0.16;
+  ctx.beginPath(); ctx.arc(0, 0, s * 1.6 * pulse, 0, Math.PI * 2); ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = "source-over";
+  ctx.fillStyle = BULLET_RIM.charge;
+  ctx.beginPath(); ctx.arc(0, 0, s * 1.08, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = color;
+  ctx.beginPath(); ctx.arc(0, 0, s, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = "#ffd9a0";
+  ctx.beginPath(); ctx.arc(-s * 0.1, -s * 0.2, s * 0.58, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = "#ffffff";
+  ctx.beginPath(); ctx.arc(-s * 0.14, -s * 0.26, s * 0.32 * pulse, 0, Math.PI * 2); ctx.fill();
+  // energy orbiting the ball: one arc per damage step, so a big shot is busier
+  const arcs = Math.min(4, 1 + Math.floor(dmg / 2));
+  const spin = t * 0.006 + bullet.seed;
+  ctx.globalCompositeOperation = "lighter";
+  ctx.strokeStyle = "#ffdc5a";
+  ctx.lineCap = "round";
+  ctx.lineWidth = 1.6;
+  ctx.globalAlpha = 0.75;
+  ctx.beginPath();
+  for (let i = 0; i < arcs; i++) {
+    const start = spin + (i * Math.PI * 2) / arcs;
+    ctx.arc(0, 0, s * 1.5, start, start + 0.7);
+    if (i < arcs - 1) ctx.moveTo(0, 0);   // one path, arcs kept apart by moveTo
+  }
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = "source-over";
+  if (hot) {
+    const emberRoll = Math.random();
+    const emberColor = emberRoll < 0.28 ? "#ffffff" : emberRoll < 0.66 ? "#ffdc5a" : "#ff3f20";
+    spawnSparks(bullet.x - bullet.vx * 0.5, bullet.y - bullet.vy * 0.5, 2, emberColor,
+      { minSpeed: 0.2, maxSpeed: 1.2, life: 18, maxSize: 3 });
+  }
+}
+// The Tech.0 round is the icon's lightning glyph, flying nose-first. The icon
+// is `clip-path: polygon(55% 0, 100% 0, 68% 37%, 94% 37%, 24% 100%, 43% 54%,
+// 8% 54%)` on a 24x34 box; these are those seven points, centred and turned
+// 180 degrees so the long point leads. A ball with needles was tried here and
+// looked good on its own, but it was not the thing on the weapon tile.
+const TECH0_GLYPH = [
+  -1.2, 17, -12, 17, -4.32, 4.42, -10.56, 4.42, 6.24, -17, 1.68, -1.36, 10.08, -1.36,
+];
+
+function tech0GlyphPath(k) {
+  ctx.beginPath();
+  ctx.moveTo(TECH0_GLYPH[0] * k, TECH0_GLYPH[1] * k);
+  for (let i = 2; i < TECH0_GLYPH.length; i += 2) ctx.lineTo(TECH0_GLYPH[i] * k, TECH0_GLYPH[i + 1] * k);
+  ctx.closePath();
+}
+
+// The crackle it drags behind: the zigzag is walked from a fixed jitter table
+// indexed by the frame counter. `Math.random()` per frame strobes, and a fresh
+// array per frame would allocate 60 times a second per round in flight.
+const TECH_JITTER = [0.9, -1.4, 0.4, 1.6, -0.7, 1.1, -1.8, 0.2, 1.3, -1.0, 0.6, -0.3];
+const TECH_TAIL_STEPS = 5;
+
+function techArcPath(spread, len, phase) {
+  ctx.beginPath();
+  ctx.moveTo(0, 0);
+  for (let i = 1; i <= TECH_TAIL_STEPS; i++) {
+    const j = TECH_JITTER[(i + phase) % TECH_JITTER.length];
+    ctx.lineTo(j * spread, (len * i) / TECH_TAIL_STEPS);
+  }
+}
+
+function drawTech0Bolt(bullet, color) {
+  const t = performance.now();
+  const s = bullet.size;
+  const pulse = 0.85 + Math.sin(t * 0.03 + bullet.x * 0.05 + bullet.y * 0.06) * 0.15;
+  const k = (s / 5.5) * pulse;
+  bullet.tick = (bullet.tick || 0) + 1;
+  const phase = bullet.tick >> 1;    // the arc re-strikes every other frame
+  ctx.globalCompositeOperation = "lighter";
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  // three passes down the same broken path: bloom, body, white-hot filament
+  ctx.globalAlpha = 0.2;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 8;
+  techArcPath(4.5, s + 18, phase); ctx.stroke();
+  ctx.globalAlpha = 0.55;
+  ctx.lineWidth = 3.5;
+  techArcPath(4.5, s + 18, phase); ctx.stroke();
+  ctx.globalAlpha = 0.9;
+  ctx.strokeStyle = "#eaffff";
+  ctx.lineWidth = 1.4;
+  techArcPath(4.5, s + 18, phase); ctx.stroke();
+  // the glyph's drop-shadow, as a bloom sized to the bolt
+  ctx.globalAlpha = 0.3;
+  ctx.fillStyle = color;
+  ctx.beginPath(); ctx.ellipse(0, 0, s * 1.7, s * 2.6, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = "source-over";
+  // rim, body, white-hot inner bolt — the same glyph three times
+  ctx.fillStyle = BULLET_RIM.tech0;
+  tech0GlyphPath(k * 1.22); ctx.fill();
+  ctx.fillStyle = color;
+  tech0GlyphPath(k); ctx.fill();
+  ctx.globalCompositeOperation = "lighter";
+  ctx.fillStyle = "#eaffff";
+  ctx.globalAlpha = 0.9;
+  tech0GlyphPath(k * 0.52); ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = "source-over";
+  if (bullet.tick % 3 === 0) {
+    spawnSparks(bullet.x, bullet.y + 6, 1, color, { minSpeed: 0.2, maxSpeed: 1, life: 12, maxSize: 2 });
+  }
+}
+
 function drawPlayerBullet(bullet) {
   const color = bullet.color || weaponColor(bullet.type === "basic" ? "blaster" : bullet.type);
   if (bullet.mirror) steerMirrorBullet(bullet);
@@ -6099,76 +8213,15 @@ function drawPlayerBullet(bullet) {
   ctx.translate(bullet.x, bullet.y);
   ctx.rotate(Math.atan2(bullet.vy, bullet.vx) + Math.PI / 2);
   if (bullet.type === "charge") {
-    const hot = (bullet.damage || 1) >= 4;
-    if (hot) {
-      const flicker = 0.82 + Math.sin(performance.now() * 0.035 + bullet.x * 0.07 + bullet.y * 0.04) * 0.18;
-      ctx.globalCompositeOperation = "lighter";
-      ctx.fillStyle = "#ff3f20";
-      ctx.globalAlpha = 0.72;
-      ctx.beginPath();
-      ctx.moveTo(-bullet.size * 0.82, bullet.size * 0.2);
-      ctx.quadraticCurveTo(-bullet.size * 0.62, bullet.size + 10, 0, bullet.size + 30 * flicker);
-      ctx.quadraticCurveTo(bullet.size * 0.62, bullet.size + 10, bullet.size * 0.82, bullet.size * 0.2);
-      ctx.closePath(); ctx.fill();
-      ctx.fillStyle = "#ffdc5a";
-      ctx.globalAlpha = 0.9;
-      ctx.beginPath();
-      ctx.moveTo(-bullet.size * 0.48, bullet.size * 0.1);
-      ctx.quadraticCurveTo(-bullet.size * 0.28, bullet.size + 6, 0, bullet.size + 19 * flicker);
-      ctx.quadraticCurveTo(bullet.size * 0.28, bullet.size + 6, bullet.size * 0.48, bullet.size * 0.1);
-      ctx.closePath(); ctx.fill();
-      ctx.globalCompositeOperation = "source-over";
-      ctx.globalAlpha = 1;
-    }
-    drawGlow(color, hot ? 20 : 12, 0, 0);
-    ctx.fillStyle = color;
-    ctx.beginPath(); ctx.arc(0, 0, bullet.size, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = "#ffffff";
-    ctx.beginPath(); ctx.arc(0, 0, bullet.size * 0.45, 0, Math.PI * 2); ctx.fill();
-    if (hot) {
-      const emberRoll = Math.random();
-      const emberColor = emberRoll < 0.28 ? "#ffffff" : emberRoll < 0.66 ? "#ffdc5a" : "#ff3f20";
-      spawnSparks(bullet.x - bullet.vx * 0.5, bullet.y - bullet.vy * 0.5, 2,
-        emberColor,
-        { minSpeed: 0.2, maxSpeed: 1.2, life: 18, maxSize: 3 });
-    }
+    drawChargeOrb(bullet, color);
   } else if (bullet.type === "tech0") {
-    const flicker = Math.sin(performance.now() * 0.04 + bullet.x * 0.08) * 3;
-    const pulse = 0.75 + Math.sin(performance.now() * 0.03 + bullet.x * 0.05 + bullet.y * 0.06) * 0.25;
-    ctx.globalCompositeOperation = "lighter";
-    // wide faint outer arc, then a thin white-hot inner arc along the same path
-    ctx.globalAlpha = 0.3;
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 7;
-    ctx.beginPath();
-    ctx.moveTo(0, bullet.size + 14);
-    ctx.lineTo(-4, bullet.size + 8);
-    ctx.lineTo(3 + flicker, bullet.size + 2);
-    ctx.lineTo(0, 0);
-    ctx.stroke();
-    ctx.globalAlpha = 0.95;
-    ctx.strokeStyle = "#eaffff";
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(0, bullet.size + 14);
-    ctx.lineTo(-4, bullet.size + 8);
-    ctx.lineTo(3 + flicker, bullet.size + 2);
-    ctx.lineTo(0, 0);
-    ctx.stroke();
-    ctx.globalAlpha = 1;
-    drawGlow(color, 14 + Math.round(5 * pulse), 0, 0);
-    ctx.fillStyle = color;
-    ctx.beginPath(); ctx.arc(0, 0, bullet.size, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = "#efffff";
-    ctx.beginPath(); ctx.arc(-1, -1, bullet.size * 0.45, 0, Math.PI * 2); ctx.fill();
-    bullet.tick = (bullet.tick || 0) + 1;
-    if (bullet.tick % 3 === 0) {
-      spawnSparks(bullet.x, bullet.y + 6, 1, color, { minSpeed: 0.2, maxSpeed: 1, life: 12, maxSize: 2 });
-    }
-    ctx.globalCompositeOperation = "source-over";
+    drawTech0Bolt(bullet, color);
+  } else if (bullet.type === "magma") {
+    drawMagmaSlug(bullet, color);
+  } else if (bullet.type === "magmaDrop") {
+    drawMagmaDrop(bullet, color);
   } else if (bullet.type === "cone") {
-    ctx.fillStyle = color;
-    ctx.beginPath(); ctx.moveTo(0, -7); ctx.lineTo(4, 0); ctx.lineTo(0, 7); ctx.lineTo(-4, 0); ctx.closePath(); ctx.fill();
+    drawConeShard(bullet, color);
   } else if (bullet.type === "mirror") {
     // a turned-around enemy round: a chrome shard with a bright leading edge
     drawGlow(color, 16, 0, 0);
@@ -6201,8 +8254,7 @@ function drawPlayerBullet(bullet) {
     ctx.moveTo(0, -7); ctx.lineTo(1.3, 0); ctx.lineTo(0, 3); ctx.lineTo(-1.3, 0);
     ctx.closePath(); ctx.fill();
   } else {
-    ctx.fillStyle = color;
-    ctx.fillRect(-2, -6, 4, 12);
+    drawBlasterBolt(bullet, color);
   }
   ctx.restore();
 }
@@ -6251,11 +8303,399 @@ function fireCone(dx, dy) {
     const angle = base + offset;
     fireInDirection(Math.cos(angle), Math.sin(angle), 1, "cone");
   }
+  weaponSfx.cone();
   // after the shots, so it isn't left pointing along the last cone arm
   facing.x = dx;
   facing.y = dy;
   return true;
 }
+
+
+// ---------------------------------------------------------------------------
+// LEVELS
+//
+// A jump-to-any-stage picker, one page per chapter. The wave numbers here are
+// the same `wave` the loop runs on, and a page's boss tile is the fight you
+// would have walked into by clearing that chapter's last wave, so the picker
+// can never describe a run the game does not actually play.
+//
+// Each page paints the chapter's real sky on a canvas of its own, from the same
+// tables the game draws with — `STAR_TINTS` for the Moon's star field, and
+// `VENUS_SKY_STOPS` / `VENUS_DECKS` for the furnace when Venus comes back.
+// Faking it with CSS gradients was the first attempt and it looked like a menu
+// illustration instead of the place you are about to fly into.
+// ---------------------------------------------------------------------------
+const LEVEL_PAGES = [
+  {
+    sky: "space", eyebrow: "CHAPTER 01", planet: "MOON",
+    levels: [
+      { wave: 1, name: "First contact" },
+      { wave: 2, name: "Chargers" },
+      { wave: 3, name: "Turrets" },
+      { wave: 4, name: "Mixed assault" },
+      { wave: 5, name: "Last wave" },
+      { wave: 5, boss: "moon", name: "Moon" },
+    ],
+  },
+  // Venus and everything past it are pulled from the picker until that chapter
+  // is ready to ship. The code behind them is still here (waveRoster 6+, the
+  // Venus sky, the Venus boss) — nothing routes a player into it, and this list
+  // is the only place that decides what is reachable.
+];
+
+// What a stage costs: the wave before it, cleared. A boss stands on the last
+// wave of its chapter, so it wants that wave cleared rather than the one before
+// — Mercury opens once wave 5 is done, Venus once wave 9 is.
+function levelRequires(level) {
+  if (level.boss) return level.boss === "venus" ? 9 : 5;
+  return level.wave - 1;
+}
+
+let levelPageIndex = 0;
+let levelFlipping = false;
+let levelsReturnTarget = null;
+const LEVEL_FLIP_MS = 420;
+
+// --- the sky previews ------------------------------------------------------
+// Miniatures, not screenshots: same palettes, same construction, sized to the
+// card. They are repainted from the one rAF loop while the panel is open, so
+// the sky in the picker drifts exactly like the sky you are jumping into.
+// Built from the arena's own `STAR_LAYERS` and `STAR_DENSITY` rather than an
+// approximation of them: three parallax layers with their own sizes, speeds and
+// alphas, a per-star twinkle rate and phase, and the ejecta cross the biggest
+// ones get. The old preview was one flat field of 1px dots all drifting at
+// random speeds, which read as noise rather than as depth.
+function levelPreviewStars(cv) {
+  const count = Math.max(24, Math.round(cv.width * cv.height * STAR_DENSITY));
+  const stars = [];
+  for (let i = 0; i < count; i++) {
+    const layer = STAR_LAYERS[Math.floor(Math.random() * STAR_LAYERS.length)];
+    stars.push({
+      x: Math.floor(rand(0, cv.width)), y: rand(0, cv.height),
+      size: layer.size,
+      speed: layer.speed * rand(0.75, 1.3),
+      alpha: layer.alpha * rand(0.6, 1),
+      twinkle: rand(0.6, 2.4),
+      phase: rand(0, Math.PI * 2),
+      tint: Math.floor(Math.random() * STAR_TINTS.length),
+      sparkle: layer.size === 3 && Math.random() < 0.22,
+    });
+  }
+  stars.sort((a, b) => a.tint - b.tint);
+  return stars;
+}
+
+// The same loop as `drawStaticStars`, on a smaller canvas. Cleared to pure
+// black like `draw()` does: the old #04040a was a shade of blue, and next to
+// the arena it previews it read as a lit sky rather than as vacuum.
+function paintLevelSpace(g, cv, t) {
+  g.fillStyle = "#000000";
+  g.fillRect(0, 0, cv.width, cv.height);
+  if (!cv.levelStars) cv.levelStars = levelPreviewStars(cv);
+  let tint = -1;
+  const wobble = t * 0.004;
+  for (const star of cv.levelStars) {
+    star.y += star.speed;
+    if (star.y > cv.height + 4) { star.y = -4; star.x = Math.floor(rand(0, cv.width)); }
+    if (star.tint !== tint) { tint = star.tint; g.fillStyle = STAR_TINTS[tint]; }
+    const alpha = Math.min(1, star.alpha * (0.55 + 0.45 * Math.sin(wobble * star.twinkle + star.phase)));
+    const x = Math.floor(star.x);
+    const y = Math.floor(star.y);
+    g.globalAlpha = alpha;
+    g.fillRect(x, y, star.size, star.size);
+    if (star.sparkle) {
+      g.globalAlpha = alpha * 0.5;
+      g.fillRect(x - star.size, y + 1, star.size * 3, 1);
+      g.fillRect(x + 1, y - star.size, 1, star.size * 3);
+    }
+  }
+  g.globalAlpha = 1;
+}
+
+function paintLevelVenus(g, cv, t) {
+  const w = cv.width;
+  const h = cv.height;
+  if (!cv.levelSky || cv.levelSkyH !== h) {
+    cv.levelSky = g.createLinearGradient(0, 0, 0, h);
+    for (const [stop, color] of VENUS_SKY_STOPS) cv.levelSky.addColorStop(stop, color);
+    const sun = g.createRadialGradient(w * 0.72, h * 0.14, 0, w * 0.72, h * 0.14, Math.max(w, h) * 0.42);
+    sun.addColorStop(0, "rgba(255, 233, 176, 0.55)");
+    sun.addColorStop(0.16, "rgba(255, 175, 74, 0.32)");
+    sun.addColorStop(0.45, "rgba(198, 84, 22, 0.16)");
+    sun.addColorStop(1, "rgba(120, 40, 10, 0)");
+    cv.levelSun = sun;
+    cv.levelSkyH = h;
+  }
+  g.fillStyle = cv.levelSky;
+  g.fillRect(0, 0, w, h);
+  g.globalCompositeOperation = "lighter";
+  g.fillStyle = cv.levelSun;
+  g.fillRect(0, 0, w, h);
+  g.globalCompositeOperation = "source-over";
+  g.lineJoin = "round";
+  for (const deck of VENUS_DECKS) {
+    const drift = t * deck.speed * w;
+    const top = h * deck.y;
+    const bottom = top + h * deck.h;
+    const amp = deck.amp * (h / 600);
+    g.beginPath();
+    g.moveTo(-20, bottom + 20);
+    for (let x = -20; x <= w + 20; x += 12) {
+      const phase = (x + drift) * deck.wave;
+      g.lineTo(x, top + Math.sin(phase) * amp + Math.sin(phase * 0.41 + 1.7) * amp * 0.55);
+    }
+    g.lineTo(w + 20, bottom + 20);
+    g.closePath();
+    g.globalAlpha = deck.alpha;
+    g.fillStyle = deck.body;
+    g.fill();
+    g.globalAlpha = deck.alpha * 0.85;
+    g.strokeStyle = deck.rim;
+    g.lineWidth = 2;
+    g.stroke();
+  }
+  g.globalAlpha = 1;
+}
+
+// Repainted from `draw()` while the panel is open — one rAF for the whole game,
+// menu included, so this never starts a second loop of its own.
+function paintLevelPreviews(t) {
+  const pages = dom.levelBook ? dom.levelBook.children : null;
+  if (!pages) return;
+  for (const page of pages) {
+    const cv = page.firstElementChild;
+    if (!cv || cv.tagName !== "CANVAS") continue;
+    const box = cv.getBoundingClientRect();
+    if (!box.width || !box.height) continue;
+    const w = Math.round(box.width);
+    const h = Math.round(box.height);
+    if (cv.width !== w || cv.height !== h) {
+      cv.width = w;
+      cv.height = h;
+      cv.levelStars = null;
+      cv.levelSky = null;
+    }
+    const g = cv.getContext("2d");
+    if (page.dataset.sky === "space") paintLevelSpace(g, cv, t); else paintLevelVenus(g, cv, t);
+  }
+}
+
+// --- the pages -------------------------------------------------------------
+// The Moon's portrait for the picker, as SVG rather than stacked CSS gradients.
+// It is the *character*, not a sphere in its colours: the angry brows, the two
+// glowing eyes and the frown are what make it recognisable, and a first pass
+// that got the body ramp and the maria right but left the face off looked like
+// a completely different boss. Every coordinate is `drawMoon`'s own, scaled by
+// 50/78 (the viewBox half-width over `MOON_RADIUS`) and re-centred on 50,50 —
+// so if the fight's proportions move, rescale from there rather than eyeballing.
+const MOON_ORB_TEMPLATE = `
+<svg viewBox="0 0 100 100" aria-hidden="true" focusable="false">
+  <defs>
+    <radialGradient id="moon-orb-body-ID" cx="34%" cy="28%" r="74%">
+      <stop offset="0" stop-color="#fbf8f1"/>
+      <stop offset=".4" stop-color="#cbc7bf"/>
+      <stop offset=".76" stop-color="#8a8781"/>
+      <stop offset="1" stop-color="#3b3936"/>
+    </radialGradient>
+    <clipPath id="moon-orb-clip-ID"><circle cx="50" cy="50" r="47"/></clipPath>
+  </defs>
+  <g clip-path="url(#moon-orb-clip-ID)">
+    <circle cx="50" cy="50" r="47" fill="url(#moon-orb-body-ID)"/>
+    <g fill="#3a393e" opacity=".26">
+      <ellipse cx="28.4" cy="29.3" rx="13.2" ry="9.4" transform="rotate(28.6 28.4 29.3)"/>
+      <ellipse cx="70.7" cy="31.2" rx="10.3" ry="7.5" transform="rotate(-22.9 70.7 31.2)"/>
+      <ellipse cx="77.3" cy="64.1" rx="11.3" ry="8.9" transform="rotate(51.6 77.3 64.1)"/>
+      <ellipse cx="22.7" cy="66.0" rx="10.3" ry="7.5" transform="rotate(-40.1 22.7 66)"/>
+      <ellipse cx="50" cy="16.2" rx="12.2" ry="6.1" transform="rotate(5.7 50 16.2)"/>
+    </g>
+    <g fill="#262524" opacity=".34">
+      <circle cx="40.6" cy="26.5" r="4.4"/>
+      <circle cx="79.7" cy="38" r="4"/>
+      <circle cx="20" cy="47" r="3.4"/>
+      <circle cx="60" cy="84" r="3.8"/>
+    </g>
+    <!-- the terminator: the lit fraction is the phase, and the phase is the fight -->
+    <!-- The terminator at MOON_PHASE_LIGHT[0] (0.24 lit). Sweep 1 puts the shadow
+         on the right limb, which is the side drawMoon leaves dark — flip it and
+         the picker lights the opposite limb from the fight. Dark, not black: the
+         unlit surface is still surface, and at 34px an opaque shadow reads as a
+         hole punched in the tile. -->
+    <path d="M50 3 A47 47 0 0 1 50 97 A26 47 0 0 1 50 3 Z" fill="#0a0c13" opacity=".58"/>
+  </g>
+  <!-- face, over the shadow, exactly as drawMoonFace stacks it -->
+  <g fill="#15161a">
+    <path d="M-14.7 -5.8 L12.8 -12.2 L14.1 -4.5 L-14.1 2.6 Z" transform="translate(32.7 37.2) rotate(-11)"/>
+    <path d="M-14.7 -5.8 L12.8 -12.2 L14.1 -4.5 L-14.1 2.6 Z" transform="translate(67.3 37.2) rotate(11)"/>
+  </g>
+  <g>
+    <circle cx="32.7" cy="41" r="5.8" fill="#f4f2ec"/>
+    <circle cx="67.3" cy="41" r="5.8" fill="#f4f2ec"/>
+    <circle cx="32.7" cy="41" r="3.5" fill="#bfe4ff"/>
+    <circle cx="67.3" cy="41" r="3.5" fill="#bfe4ff"/>
+    <circle cx="32.7" cy="41" r="1.6" fill="#0b1018"/>
+    <circle cx="67.3" cy="41" r="1.6" fill="#0b1018"/>
+    <circle cx="30.1" cy="38.5" r="1.3" fill="rgba(255,255,255,.9)"/>
+    <circle cx="64.7" cy="38.5" r="1.3" fill="rgba(255,255,255,.9)"/>
+  </g>
+  <!-- The scowl. Sweep 1, and check it by measuring rather than by eye: the arc's
+       midpoint must land at y 60.3, *above* the corners at 72.6, which is where
+       drawMoon's arc(0, 44, 28, PI+0.32, 2PI-0.32) puts it. Flipped to sweep 0
+       it becomes a broad smile, and at 34px the difference is easy to misread. -->
+  <path d="M33 72.6 A17.9 17.9 0 0 1 67 72.6" fill="none" stroke="#15161a" stroke-width="3.8" stroke-linecap="round"/>
+  <!-- rim light along the lit limb: crisp, because there is no air to soften it -->
+  <path d="M8 69.8 A46.4 46.4 0 0 1 85.8 20.4" fill="none" stroke="rgba(244,248,255,.5)" stroke-width="1.6"/>
+</svg>`;
+
+// Two copies of this SVG live in the document at once — the LEVELS boss orb and
+// the ALPHA progress pip — and `url(#id)` is a document-wide lookup, so sharing
+// ids between them made one instance paint with the other's (hidden) gradient
+// and clip: the orb went black. Every copy gets its own suffix.
+function moonOrbSvg(suffix) {
+  return MOON_ORB_TEMPLATE.replaceAll("-ID", "-" + suffix);
+}
+
+function buildLevelPage(index) {
+  const page = LEVEL_PAGES[index];
+  const el = document.createElement("div");
+  el.className = "level-page";
+  el.dataset.sky = page.sky;
+  el.append(document.createElement("canvas"));
+  const inner = document.createElement("div");
+  inner.className = "level-page-inner";
+  const eyebrow = document.createElement("p");
+  eyebrow.className = "level-eyebrow";
+  eyebrow.textContent = page.eyebrow;
+  const planet = document.createElement("h3");
+  planet.className = "level-planet";
+  planet.textContent = page.planet;
+  const grid = document.createElement("div");
+  grid.className = "level-grid";
+  for (const level of page.levels) {
+    const tile = document.createElement("button");
+    tile.type = "button";
+    tile.className = level.boss ? "level-tile boss" : "level-tile";
+    tile.dataset.wave = String(level.wave);
+    const open = clearedWave >= levelRequires(level);
+    if (level.boss) {
+      tile.dataset.boss = level.boss;
+      const orb = document.createElement("i");
+      orb.className = `boss-orb ${level.boss}`;
+      if (level.boss === "moon") orb.innerHTML = moonOrbSvg("lv");
+
+      const caption = document.createElement("small");
+      caption.textContent = "BOSS";
+      tile.append(orb, caption);
+      tile.setAttribute("aria-label", open ? `Boss: ${level.name}` : `Boss ${level.name} locked: clear wave ${levelRequires(level)}`);
+    } else {
+      const number = document.createElement("span");
+      number.className = "level-number";
+      number.textContent = String(level.wave);
+      tile.append(number);
+      tile.setAttribute("aria-label", open ? `Wave ${level.wave}: ${level.name}` : `Wave ${level.wave} locked: clear wave ${levelRequires(level)}`);
+    }
+    if (!open) {
+      tile.classList.add("locked");
+      // Genuinely disabled, not just styled: `MENU_FOCUS_SELECTOR` skips
+      // [disabled], so the arrow keys walk straight past a locked stage.
+      tile.disabled = true;
+    }
+    grid.append(tile);
+  }
+  inner.append(eyebrow, planet, grid);
+  el.append(inner);
+  return el;
+}
+
+function renderLevelChrome() {
+  // A single chapter needs no arrows and no dots — with Venus pulled, showing
+  // them would advertise pages that are not there.
+  const nav = document.querySelector(".level-nav");
+  if (nav) nav.hidden = LEVEL_PAGES.length < 2;
+  const dots = dom.levelDots;
+  dots.textContent = "";
+  for (let i = 0; i < LEVEL_PAGES.length; i++) {
+    const dot = document.createElement("i");
+    if (i === levelPageIndex) dot.className = "on";
+    dots.append(dot);
+  }
+  document.getElementById("level-prev").disabled = levelPageIndex === 0;
+  document.getElementById("level-next").disabled = levelPageIndex === LEVEL_PAGES.length - 1;
+}
+
+function showLevelPage(index) {
+  levelPageIndex = index;
+  dom.levelBook.textContent = "";
+  dom.levelBook.append(buildLevelPage(index));
+  renderLevelChrome();
+}
+
+// Both pages move at once. The first version swung one page out, swapped its
+// contents while it was edge-on and swung it back in, which read as a stutter
+// with a jump in the middle — the incoming page has to already be travelling
+// when the outgoing one leaves.
+function flipLevelPage(delta) {
+  const next = levelPageIndex + delta;
+  if (levelFlipping || next < 0 || next >= LEVEL_PAGES.length) return;
+  levelFlipping = true;
+  const book = dom.levelBook;
+  const outgoing = book.firstElementChild;
+  const incoming = buildLevelPage(next);
+  const keepFocus = outgoing && outgoing.contains(document.activeElement);
+  incoming.classList.add(delta > 0 ? "level-enter-right" : "level-enter-left");
+  book.append(incoming);
+  void incoming.offsetWidth;      // commit the offscreen start before animating
+  incoming.classList.remove("level-enter-right", "level-enter-left");
+  if (outgoing) outgoing.classList.add(delta > 0 ? "level-leave-left" : "level-leave-right");
+  levelPageIndex = next;
+  renderLevelChrome();
+  playSound(delta > 0 ? 420 : 360, 0.05, "triangle");
+  setTimeout(() => {
+    if (outgoing) outgoing.remove();
+    levelFlipping = false;
+    if (keepFocus) {
+      const first = incoming.querySelector(".level-tile");
+      if (first) first.focus();
+    }
+  }, LEVEL_FLIP_MS);
+}
+
+function openLevelsPanel(trigger) {
+  levelsReturnTarget = trigger;
+  showLevelPage(levelPageIndex);
+  dom.levelsPanel.classList.add("visible");
+  dom.levelsPanel.setAttribute("aria-hidden", "false");
+  // Straight onto the first stage, not the close button: `focusMenuDefault`
+  // would take the first focusable in the card, and that is the x.
+  const first = dom.levelBook.querySelector(".level-tile");
+  if (first) first.focus(); else focusMenuDefault(dom.levelsPanel);
+}
+
+function startLevel(tile) {
+  const wave = Number(tile.dataset.wave) || 1;
+  const boss = tile.dataset.boss || null;
+  closeMenuPanel(dom.levelsPanel, null);
+  // The picker also opens from the pause card, and the pause overlay sits above
+  // the canvas — leaving it up would play the warp behind a PAUSED screen.
+  if (gamePaused) setPaused(false);
+  // The same warp the START button flies, so a stage jump is not a lesser exit
+  // from the menu than a fresh run.
+  beginWarpLaunch(() => startGame(wave, boss));
+}
+
+// The ALPHA panel's progress row: the finished planet is the LEVELS picker's own
+// Moon portrait rather than a coloured dot, and the eleven still to come are
+// empty rings with a question mark.
+const alphaPipMoon = document.getElementById("alpha-pip-moon");
+if (alphaPipMoon) alphaPipMoon.innerHTML = moonOrbSvg("alpha");
+const thanksPipMoon = document.getElementById("thanks-pip-moon");
+if (thanksPipMoon) thanksPipMoon.innerHTML = moonOrbSvg("thanks");
+
+// The menu's MOON UPDATE badge shows the same portrait, at size. It has to be
+// the identical asset: a hand-built CSS lookalike was the first attempt and it
+// drifted from the real body immediately — wrong eyes, wrong crescent — so it
+// read as a different character to the one you actually fight.
+const moonPromoOrb = document.getElementById("moon-promo-orb");
+if (moonPromoOrb) moonPromoOrb.innerHTML = moonOrbSvg("promo");
 
 function showLoading(callback) {
   const el = document.getElementById("loading-screen");
@@ -6297,15 +8737,18 @@ document.documentElement.dataset.quality = quality.name;
 setupWeaponBook();
 resize();
 initStars();
-syncMercuryRewardUI();
+syncMoonRewardUI();
+syncVenusRewardUI();
+syncSuperLockUI();
 refreshLoadoutUI();
 setTheme(playerColor);
 syncAudioControls();
 requestAnimationFrame(frame);
 
 // --- title card ------------------------------------------------------------
-// "DANIEL AND PETROS PRESENT..." holds for a beat, then hands over to the menu.
-const CREDITS_HOLD_MS = 2600;
+// "DANIEL AND PETROS PRESENT..." holds until the player clicks or presses a
+// key — that same gesture is what unlocks audio, so the card and the sound
+// always start together instead of the card timing out ahead of the music.
 let creditsDone = false;
 
 function finishCredits() {
@@ -6313,36 +8756,51 @@ function finishCredits() {
   creditsDone = true;
   const credits = document.getElementById("credits-screen");
   credits.classList.add("fading");
-  document.getElementById("menu-wrap").classList.remove("hidden");
+  document.getElementById("menu-wrap").classList.remove("hidden", "launching");
   setTimeout(() => credits.classList.add("gone"), 750);
+  // If the welcome theme is already sounding, hand off to the menu track with
+  // a slow crossfade rather than the usual snappy track switch. If audio
+  // hasn't been unlocked yet, leave it alone — unlockAudio() below checks
+  // creditsDone and will start straight into "menu" on the player's first
+  // gesture instead of starting a track against a still-suspended context.
+  if (audioContext && music.current() === "intro") music.play("menu", 1.4);
 }
-setTimeout(finishCredits, CREDITS_HOLD_MS);
-// a click or key skips the wait
+// a click or key advances past the card
 document.getElementById("credits-screen").addEventListener("click", finishCredits);
 
-// Browsers won't let audio start before a gesture, so the menu track waits for
-// the player's first click or keypress and then comes in.
+// Browsers won't let audio start before a gesture, so the welcome/menu track
+// waits for the player's first click or keypress and then comes in — the
+// welcome theme while the title card is up, the menu track once it's gone.
+// Deliberately mousedown/touchstart/keydown, not pointerdown: Safari's
+// autoplay-gesture detection only recognises the legacy input events (as
+// every button click handler elsewhere in this file already relies on) and
+// silently ignores Pointer Events, so a pointerdown-only listener would run
+// this function on Safari without ever actually unsuspending the context.
 function unlockAudio() {
   ensureAudio();
   if (audioContext && audioContext.state === "suspended") audioContext.resume();
-  if (!gameActive) music.play("menu");
-  window.removeEventListener("pointerdown", unlockAudio);
+  if (!gameActive) music.play(creditsDone ? "menu" : "intro");
+  window.removeEventListener("mousedown", unlockAudio);
+  window.removeEventListener("touchstart", unlockAudio);
   window.removeEventListener("keydown", unlockAudio);
 }
-window.addEventListener("pointerdown", unlockAudio);
+window.addEventListener("mousedown", unlockAudio);
+window.addEventListener("touchstart", unlockAudio, { passive: true });
 window.addEventListener("keydown", unlockAudio);
 
 document.getElementById("start-btn").addEventListener("click", function () {
-  showLoading(startGame);
+  beginWarpLaunch(startGame);
 });
 document.getElementById("try-again-btn").addEventListener("click", function () {
   showLoading(startGame);
 });
 document.getElementById("main-menu-btn").addEventListener("click", returnToMenu);
 document.getElementById("defeat-retry").addEventListener("click", function () {
-  dom.mercuryDefeatScreen.classList.remove("visible");
-  dom.mercuryDefeatScreen.setAttribute("aria-hidden", "true");
-  showLoading(startGame);
+  dom.moonDefeatScreen.classList.remove("visible");
+  dom.moonDefeatScreen.setAttribute("aria-hidden", "true");
+  const wave = retryWave;
+  const boss = retryBoss;
+  showLoading(() => startGame(wave, boss));
 });
 document.getElementById("defeat-menu").addEventListener("click", returnToMenu);
 document.getElementById("resume-btn").addEventListener("click", function () {
@@ -6350,33 +8808,57 @@ document.getElementById("resume-btn").addEventListener("click", function () {
 });
 document.getElementById("pause-menu-btn").addEventListener("click", returnToMenu);
 document.getElementById("continue-boss").addEventListener("click", startBossFight);
+// The Moon is the end of the built game, so CONTINUE does not fly on into Venus
+// airspace: it hands over to the thanks card, which is the run's last beat and
+// carries the only way out (MAIN MENU).
 document.getElementById("victory-continue").addEventListener("click", function () {
-  document.getElementById("victory-screen").classList.remove("visible");
-  document.getElementById("victory-screen").setAttribute("aria-hidden", "true");
-  setPaused(false);
-  bossIntro = false;
-  bossMode = false;
-  syncMobileControls();
-  music.play("battle");
-  wave = 6;
-  player.x = W / 2; player.y = playerStartY(); player.vx = 0; player.vy = 0;
-  enemyBullets = [];
-  createEnemies();
-  showWaveBanner("WAVE 6", "ENTERING VENUS AIRSPACE");
+  dom.victoryScreen.classList.remove("visible");
+  dom.victoryScreen.setAttribute("aria-hidden", "true");
+  dom.thanksScreen.classList.add("visible");
+  dom.thanksScreen.setAttribute("aria-hidden", "false");
+  focusMenuDefault(dom.thanksScreen);
+});
+document.getElementById("thanks-menu").addEventListener("click", function () {
+  celebrationScene = null;
+  returnToMenu();
 });
 document.getElementById("reward-equip-tech0").addEventListener("click", function () {
   if (selectedWeapon === "tech0") setSelectedWeapon(rewardPreviousWeapon);
   else { rewardPreviousWeapon = selectedWeapon; setSelectedWeapon("tech0"); }
+});
+document.getElementById("reward-equip-magma").addEventListener("click", function () {
+  if (selectedWeapon === "magma") setSelectedWeapon(rewardPreviousWeapon);
+  else { rewardPreviousWeapon = selectedWeapon; setSelectedWeapon("magma"); }
 });
 document.getElementById("reward-equip-grey").addEventListener("click", function () {
   if (playerColor === GREY_SHIP_COLOR) setPlayerColor(rewardPreviousColor);
   else { rewardPreviousColor = playerColor; setPlayerColor(GREY_SHIP_COLOR); }
   playSound(760, 0.07, "square");
 });
+document.getElementById("reward-equip-magma-ship").addEventListener("click", function () {
+  if (playerColor === MAGMA_SHIP_COLOR) setPlayerColor(rewardPreviousColor);
+  else { rewardPreviousColor = playerColor; setPlayerColor(MAGMA_SHIP_COLOR); }
+  playSound(760, 0.07, "square");
+});
 document.getElementById("reward-continue").addEventListener("click", function () {
   const rewards = document.getElementById("reward-screen");
-  rewards.classList.remove("visible");
+  const next = document.getElementById("reward-continue");
+  rewards.classList.remove("visible", "snap");
+  next.classList.remove("ready");
   rewards.setAttribute("aria-hidden", "true");
+  if (rewardMode === "venus") {
+    // back past the furnace: the extra heart was granted by finishBossDeath,
+    // the waves resume here
+    gamePaused = false;
+    bossIntro = false;
+    syncMobileControls();
+    celebrationScene = null;
+    music.play("battle");
+    createEnemies();
+    showWaveBanner("VENUS DESTROYED", "+1 HEART");
+    announceWave(11, 1800);
+    return;
+  }
   dom.victoryScreen.classList.add("visible");
   dom.victoryScreen.setAttribute("aria-hidden", "false");
   focusMenuDefault(dom.victoryScreen);
@@ -6384,17 +8866,478 @@ document.getElementById("reward-continue").addEventListener("click", function ()
 document.getElementById("admin-submit").addEventListener("click", function () {
   const input = document.getElementById("admin-code");
   const status = document.getElementById("admin-status");
-  if (input.value.trim().toUpperCase() === "PETROSADMIN") {
-    adminInvincible = true;
-    status.textContent = "INVINCIBILITY ENABLED";
+  if (input.value.trim().toUpperCase() === "BUILDER") {
+    status.textContent = "BUILDER UNLOCKED — PRESS `";
     input.value = "";
-  } else if (input.value.trim().toUpperCase() === "TEST") {
-    testMode = true;
-    status.textContent = "TEST ROOM ENABLED";
-    input.value = "";
+    builder.unlock();
   } else {
     status.textContent = "INVALID CODE";
   }
+});
+// ---------------------------------------------------------------------------
+// BUILDER
+//
+// The dev console, unlocked by typing BUILDER into the menu's code box and
+// toggled after that with the backtick key. It replaces the old PETROSADMIN
+// (invincibility) and TEST (a practice room with one dummy target) codes, both
+// of which were a fixed cheat each; this is the general case.
+//
+// How it can change *anything*: `builderEval` is a top-level function, so a
+// direct `eval` inside it runs in this script's own lexical scope and can read
+// and assign every top-level `let` in the file — `wave`, `lives`, `boss`,
+// `selectedSuper`, all of it. That is the whole trick, and it is why the
+// function must stay at the top level of main.js rather than being moved into
+// a module or an IIFE.
+function builderEval(source) {
+  return eval(source);
+}
+
+// Completion is built from the file's own source rather than a hand-kept list:
+// `builderEval` can reach every top-level binding, but nothing can *enumerate*
+// them (script-scope `let` is not a property of `window`), so the console
+// fetches main.js and reads the declarations out of it. A hand-kept list would
+// be wrong within a week; this one cannot drift.
+let builderSymbols = [];
+// Captured now: `document.currentScript` is null by the time the console is
+// unlocked, and the ?v= cache-bust means "main.js" alone can fetch a stale copy.
+const BUILDER_SELF_URL = (document.currentScript && document.currentScript.src) || "main.js";
+function builderLoadSymbols() {
+  fetch(BUILDER_SELF_URL).then((r) => r.text()).then((text) => {
+    const found = new Set();
+    const decl = /^(?:let|const|var|function)\s+([A-Za-z_$][\w$]*)/gm;
+    let m;
+    while ((m = decl.exec(text))) found.add(m[1]);
+    builderSymbols = Array.from(found).sort();
+  }).catch(() => {
+    builderSymbols = [];
+  });
+}
+
+const builder = (function () {
+  const ui = {};
+  const history = [];
+  let historyIndex = -1;
+  let unlocked = false;
+  let built = false;
+  let watches = [];
+
+  function log(text, cls) {
+    if (!ui.log) return;
+    const line = document.createElement("div");
+    if (cls) line.className = cls;
+    line.textContent = text;
+    ui.log.append(line);
+    while (ui.log.childElementCount > 200) ui.log.firstElementChild.remove();
+    ui.log.scrollTop = ui.log.scrollHeight;
+  }
+
+  // Objects get one level of shape rather than "[object Object]", which is
+  // useless when the thing you asked for is `player` or `boss`.
+  function show(value) {
+    if (value === undefined) return "undefined";
+    if (value === null) return "null";
+    if (typeof value === "function") return `function ${value.name || "(anonymous)"}()`;
+    if (typeof value !== "object") return String(value);
+    if (Array.isArray(value)) return `Array(${value.length})` + (value.length && value.length <= 12 ? ` [${value.map(show).join(", ")}]` : "");
+    try {
+      const keys = Object.keys(value);
+      const head = keys.slice(0, 10).map((k) => {
+        const v = value[k];
+        const short = v && typeof v === "object" ? (Array.isArray(v) ? `Array(${v.length})` : "{…}") : typeof v === "number" ? Math.round(v * 1000) / 1000 : String(v);
+        return `${k}: ${short}`;
+      });
+      return `{ ${head.join(", ")}${keys.length > 10 ? ", …" : ""} }`;
+    } catch (error) {
+      return String(value);
+    }
+  }
+
+  const COMMANDS = {
+    help: {
+      help: "list every command",
+      run() {
+        log("BUILDER — commands", "b-key");
+        for (const name of Object.keys(COMMANDS).sort()) log(`  ${name.padEnd(9)} ${COMMANDS[name].help}`);
+        log("  anything else is evaluated as JS in the game's own scope,", "b-note");
+        log("  so `wave = 9`, `boss.health = 1` and `lives` all work.", "b-note");
+        log("  Tab completes, up/down walks history, ` closes.", "b-note");
+      },
+    },
+    god: {
+      help: "[on|off] invulnerability",
+      run(a) { devGodMode = a[0] ? a[0] !== "off" && a[0] !== "0" : !devGodMode; log(`god ${devGodMode ? "on" : "off"}`); },
+    },
+    lives: {
+      help: "N — set hearts",
+      run(a) {
+        if (!a.length) return log(`lives = ${lives}`);
+        lives = Math.max(0, Math.floor(Number(a[0]) || 0));
+        setLives(lives, true);
+        log(`lives = ${lives}`);
+      },
+    },
+    wave: {
+      help: "N — restart at wave N",
+      run(a) {
+        if (!a.length) return log(`wave = ${wave}`);
+        const n = Number(a[0]);
+        if (!Number.isFinite(n)) return log("wave <n>", "b-err");
+        startGame(Math.max(1, Math.floor(n)), null);
+        log(`jumped to wave ${Math.max(1, Math.floor(n))}`);
+      },
+    },
+    boss: {
+      help: "[moon|venus] — jump into a boss fight",
+      run(a) {
+        const kind = a[0] === "venus" ? "venus" : "moon";
+        startGame(kind === "venus" ? 10 : 5, kind);
+        log(`entering ${kind}`);
+      },
+    },
+    bosshp: {
+      help: "N — set the live boss's health",
+      run(a) {
+        if (!bossMode) return log("no boss in play", "b-err");
+        if (!a.length) return log(`boss.health = ${boss.health} / ${bossMaxHealth()}`);
+        boss.health = Math.max(0, Number(a[0]) || 0);
+        log(`boss.health = ${boss.health} / ${bossMaxHealth()}`);
+      },
+    },
+    kill: {
+      help: "kill every enemy on screen",
+      run() {
+        let n = 0;
+        for (const enemy of enemies) if (enemy.alive) { damageEnemy(enemy, 9999); n++; }
+        for (const m of bossMinions) if (m.health > 0) { m.health = 0; n++; }
+        log(`killed ${n}`);
+      },
+    },
+    clear: {
+      help: "clear incoming fire (or `clear log`)",
+      run(a) {
+        if (a[0] === "log") { ui.log.textContent = ""; return; }
+        const n = enemyBullets.length + bossBullets.length;
+        enemyBullets.length = 0;
+        bossBullets.length = 0;
+        log(`cleared ${n} shots`);
+      },
+    },
+    meter: {
+      help: "[0..1] — set the super meter (default full)",
+      run(a) {
+        const want = a.length ? Math.max(0, Math.min(1, Number(a[0]))) : 1;
+        lastSuperKills = superDamage - want * (SUPER_COST[selectedSuper] || 20);
+        updateSuperMeter();
+        log(`meter = ${(superMeter * 100).toFixed(0)}%`);
+      },
+    },
+    super: {
+      help: "NAME — equip a super",
+      run(a) {
+        const name = (a[0] || "").toLowerCase();
+        if (!SUPER_COST[name]) return log(`supers: ${Object.keys(SUPER_COST).join(", ")}`, "b-err");
+        // Deliberately ignores the lock — being able to try an unreleased
+        // reward is most of the point of the console. `unlock all` is there
+        // when you want the player-facing state instead.
+        selectedSuper = name;
+        refreshLoadoutUI();
+        updateSuperMeter();
+        log(`super = ${name}${superLocked(name) ? "  (locked for players)" : ""}`);
+      },
+    },
+    gun: {
+      help: "NAME — equip a primary",
+      run(a) {
+        const name = (a[0] || "").toLowerCase();
+        if (!WEAPON_LABELS[name]) return log(`guns: ${Object.keys(WEAPON_LABELS).join(", ")}`, "b-err");
+        selectedWeapon = name;
+        refreshLoadoutUI();
+        log(`gun = ${name}`);
+      },
+    },
+    color: {
+      help: "#rrggbb — ship colour",
+      run(a) {
+        if (!/^#[0-9a-f]{6}$/i.test(a[0] || "")) return log("expected #rrggbb", "b-err");
+        setPlayerColor(a[0]);
+        log(`ship = ${a[0]}`);
+      },
+    },
+    unlock: {
+      help: "[all|none] — rewards and stage progress",
+      run(a) {
+        if (a[0] === "none") {
+          moonRewardsUnlocked = false;
+          venusRewardsUnlocked = false;
+          unlockedSupers = new Set();
+          persistUnlockedSupers();
+          clearedWave = 0;
+          syncMoonRewardUI();
+          syncVenusRewardUI();
+          syncSuperLockUI();
+          return log("locked everything");
+        }
+        unlockMoonRewards();
+        unlockVenusRewards();
+        for (const name of Object.keys(LOCKED_SUPERS)) unlockSuper(name);
+        recordWaveCleared(99);
+        log("unlocked every reward, super and stage");
+      },
+    },
+    speed: {
+      help: "N — time scale (0.25 slow-mo, 2 fast)",
+      run(a) {
+        if (!a.length) return log(`speed = ${devTimeScale}x`);
+        devTimeScale = Math.max(0.05, Math.min(4, Number(a[0]) || 1));
+        log(`speed = ${devTimeScale}x`);
+      },
+    },
+    spawn: {
+      help: "TYPE [N] — spawn enemies",
+      run(a) {
+        const type = (a[0] || "grunt").toLowerCase();
+        if (!ENEMY_TYPES[type]) return log(`types: ${Object.keys(ENEMY_TYPES).join(", ")}`, "b-err");
+        const count = Math.max(1, Math.min(40, Math.floor(Number(a[1]) || 1)));
+        for (let i = 0; i < count; i++) {
+          enemies.push(makeEnemy(type, 80 + Math.random() * Math.max(1, W - 160), 90 + Math.random() * 120, Math.random() * 6));
+        }
+        log(`spawned ${count} x ${type}`);
+      },
+    },
+    tp: {
+      help: "X Y — move the ship",
+      run(a) {
+        if (!Number.isFinite(Number(a[0])) || !Number.isFinite(Number(a[1]))) return log("tp <x> <y>", "b-err");
+        player.x = Number(a[0]);
+        player.y = Number(a[1]);
+        player.vx = 0;
+        player.vy = 0;
+        log(`ship at ${Math.round(player.x)}, ${Math.round(player.y)}`);
+      },
+    },
+    watch: {
+      help: "EXPR — pin a live value to the top of the console",
+      run(a, raw) {
+        if (!raw) return log("watch <expression>", "b-err");
+        watches.push(raw);
+        log(`watching ${raw}`);
+      },
+    },
+    unwatch: {
+      help: "[N|all] — drop a pinned value",
+      run(a) {
+        if (!a[0] || a[0] === "all") { watches = []; return log("cleared watches"); }
+        watches.splice(Math.floor(Number(a[0])) - 1, 1);
+        log("dropped");
+      },
+    },
+    vars: {
+      help: "[filter] — list game symbols and their values",
+      run(a) {
+        const filter = (a[0] || "").toLowerCase();
+        const names = builderSymbols.filter((n) => !filter || n.toLowerCase().includes(filter));
+        if (!names.length) return log(builderSymbols.length ? "no match" : "symbol table still loading", "b-err");
+        log(`${names.length} symbol${names.length === 1 ? "" : "s"}`, "b-key");
+        for (const name of names.slice(0, 60)) {
+          let value;
+          try { value = show(builderEval(name)); } catch (error) { value = "<unreadable>"; }
+          if (value.length > 90) value = value.slice(0, 87) + "…";
+          log(`  ${name} = ${value}`);
+        }
+        if (names.length > 60) log(`  …and ${names.length - 60} more`, "b-note");
+      },
+    },
+  };
+
+  function completions(text) {
+    if (!text) return [];
+    // First word: a command. After that, whatever the game actually calls things.
+    const head = text.split(/\s+/)[0];
+    const pool = text.includes(" ")
+      ? builderSymbols
+      : Object.keys(COMMANDS).concat(builderSymbols);
+    const word = text.includes(" ") ? text.slice(text.lastIndexOf(" ") + 1) : head;
+    if (!word) return [];
+    const lower = word.toLowerCase();
+    return pool.filter((n) => n.toLowerCase().startsWith(lower) && n !== word).sort();
+  }
+
+  function ghost() {
+    const text = ui.line.value;
+    const hits = completions(text);
+    if (!hits.length) { ui.ghost.textContent = ""; return; }
+    const shown = hits.slice(0, 8).join("  ");
+    ui.ghost.textContent = hits.length > 8 ? `${shown}  …+${hits.length - 8}` : shown;
+  }
+
+  function complete() {
+    const text = ui.line.value;
+    const hits = completions(text);
+    if (!hits.length) return;
+    const cut = text.includes(" ") ? text.lastIndexOf(" ") + 1 : 0;
+    // Longest common prefix, so tabbing narrows rather than guessing.
+    let prefix = hits[0];
+    for (const hit of hits) {
+      let i = 0;
+      while (i < prefix.length && i < hit.length && prefix[i].toLowerCase() === hit[i].toLowerCase()) i++;
+      prefix = prefix.slice(0, i);
+    }
+    ui.line.value = text.slice(0, cut) + prefix + (hits.length === 1 ? " " : "");
+    ghost();
+  }
+
+  function run(raw) {
+    const text = raw.trim();
+    if (!text) return;
+    log(`> ${text}`, "b-in");
+    history.push(text);
+    historyIndex = history.length;
+    const parts = text.split(/\s+/);
+    const name = parts[0].toLowerCase();
+    const rest = text.slice(parts[0].length).trim();
+    // `wave 7` is a command; `wave * 3 + 1` is an expression that happens to
+    // start with a command's name. A command only wins when its arguments look
+    // like arguments — bare words, numbers, hex colours — and never when the
+    // line carries JS punctuation. `watch` is exempt: its argument *is* an
+    // expression, so it always takes the rest of the line raw.
+    const looksLikeArgs = rest === "" || /^[\w#.-]+(\s+[\w#.-]+)*$/.test(rest);
+    const command = COMMANDS[name] && (name === "watch" || looksLikeArgs) ? COMMANDS[name] : null;
+    try {
+      if (command) command.run(parts.slice(1), rest);
+      else log(show(builderEval(text)));
+    } catch (error) {
+      log(String(error && error.message ? error.message : error), "b-err");
+    }
+  }
+
+  // Repainted from the one rAF in draw(), like everything else on screen.
+  function paintWatches() {
+    if (!built || !ui.watch) return;
+    if (!watches.length) { ui.watch.hidden = true; return; }
+    const lines = watches.map((expr, i) => {
+      let value;
+      try { value = show(builderEval(expr)); } catch (error) { value = "<error>"; }
+      return `${i + 1}. ${expr} = ${value}`;
+    });
+    const next = lines.join("\n");
+    if (ui.watch.textContent !== next) ui.watch.textContent = next;
+    ui.watch.hidden = false;
+  }
+
+  function open() {
+    if (!unlocked || !built) return;
+    ui.root.hidden = false;
+    ui.line.focus();
+  }
+  function close() {
+    if (!built) return;
+    ui.root.hidden = true;
+    ui.line.blur();
+  }
+  function toggle() { if (ui.root.hidden) open(); else close(); }
+
+  function unlock() {
+    if (unlocked) return;
+    unlocked = true;
+    build();
+    builderLoadSymbols();
+    open();
+    log("BUILDER unlocked. Type `help`. Backtick toggles this window.", "b-key");
+  }
+
+  // Nothing exists until the code is entered — no markup in index.html, no
+  // elements in the document, no key listeners, nothing in the tab order or the
+  // accessibility tree, and nothing to reveal by deleting a `hidden` attribute
+  // in devtools. A gated-but-present panel is still a panel a player can find.
+  function build() {
+    if (built) return;
+    built = true;
+    ui.root = document.createElement("div");
+    ui.root.className = "builder";
+    ui.root.id = "builder";
+    ui.root.setAttribute("aria-label", "Builder console");
+    ui.root.innerHTML = `
+      <div class="builder-bar">
+        <span class="builder-title">BUILDER</span>
+        <span class="builder-hint">\` toggles &middot; <b>help</b> for commands</span>
+        <button class="builder-close" type="button" aria-label="Close builder">&times;</button>
+      </div>
+      <div class="builder-watch" hidden></div>
+      <div class="builder-log" role="log" aria-live="polite"></div>
+      <div class="builder-ghost" aria-hidden="true"></div>
+      <div class="builder-input">
+        <span class="builder-caret">&gt;</span>
+        <input type="text" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Builder command" />
+      </div>`;
+    document.body.append(ui.root);
+    ui.log = ui.root.querySelector(".builder-log");
+    ui.line = ui.root.querySelector(".builder-input input");
+    ui.ghost = ui.root.querySelector(".builder-ghost");
+    ui.watch = ui.root.querySelector(".builder-watch");
+    ui.root.querySelector(".builder-close").addEventListener("click", close);
+
+    // Capture phase on window, so the game's own keydown/keyup listeners (which
+    // are on window, bubbling) never see a keystroke meant for the console.
+    // Without this, typing `god` walks the ship and `s` fires the super.
+    window.addEventListener("keydown", function (event) {
+      // Toggle on the key alone, with no condition on focus or visibility. The
+      // first version also required the panel be hidden *or* its input focused,
+      // which meant that the moment you clicked into the game to play — the
+      // normal thing to do with a console open — the key went dead and fell
+      // through to the menu handler instead.
+      //
+      // `key` as well as `code`, because the physical key that produces a
+      // backtick is not Backquote on every keyboard layout.
+      if (unlocked && (event.code === "Backquote" || event.key === "`")) {
+        event.preventDefault();
+        event.stopPropagation();
+        toggle();
+        return;
+      }
+      if (document.activeElement !== ui.line) return;
+      event.stopPropagation();
+      if (event.code === "Enter" || event.code === "NumpadEnter") {
+        event.preventDefault();
+        run(ui.line.value);
+        ui.line.value = "";
+        ghost();
+      } else if (event.code === "Tab") {
+        event.preventDefault();
+        complete();
+      } else if (event.code === "ArrowUp") {
+        event.preventDefault();
+        if (historyIndex > 0) ui.line.value = history[--historyIndex] || "";
+        ghost();
+      } else if (event.code === "ArrowDown") {
+        event.preventDefault();
+        historyIndex = Math.min(history.length, historyIndex + 1);
+        ui.line.value = history[historyIndex] || "";
+        ghost();
+      } else if (event.code === "Escape") {
+        event.preventDefault();
+        close();
+      }
+    }, true);
+    window.addEventListener("keyup", function (event) {
+      if (document.activeElement === ui.line) event.stopPropagation();
+    }, true);
+    ui.line.addEventListener("input", ghost);
+  }
+
+  // Only what the game itself calls. `open`/`toggle`/`close`/`log` were on here
+  // and were a second way in for anyone who found the object.
+  return { unlock, paintWatches, isOpen: () => built && !ui.root.hidden };
+})();
+
+["alpha-btn", "alpha-title-btn"].forEach((id) => {
+  const mark = document.getElementById(id);
+  if (mark) mark.addEventListener("click", function () { openAlphaPanel(this); });
+});
+["alpha-close", "alpha-dismiss"].forEach((id) => {
+  const button = document.getElementById(id);
+  if (button) button.addEventListener("click", function () {
+    closeMenuPanel(dom.alphaPanel, alphaReturnTarget || document.getElementById("alpha-btn"));
+  });
 });
 document.getElementById("controls-btn").addEventListener("click", function () {
   openControlsPanel(this);
@@ -6402,17 +9345,77 @@ document.getElementById("controls-btn").addEventListener("click", function () {
 document.getElementById("pause-controls-btn").addEventListener("click", function () {
   openControlsPanel(this);
 });
-document.getElementById("changelog-btn").addEventListener("click", function () {
-  dom.changelogPanel.classList.add("visible");
-  dom.changelogPanel.setAttribute("aria-hidden", "false");
-  focusMenuDefault(dom.changelogPanel);
-});
-document.getElementById("changelog-close").addEventListener("click", function () {
-  closeMenuPanel(dom.changelogPanel, document.getElementById("changelog-btn"));
+// Dev reset: drops both unlock flags back to a fresh install so the locked
+// states can be tested without clearing site data by hand. Two-step on purpose
+// -- one stray click on the menu should not throw away real progress -- and it
+// only clears progress, not the audio mix, which is a preference.
+const resetBtn = document.getElementById("reset-btn");
+let resetArmTimer = null;
+
+// Every label change goes through here, and every pending timer lives in the
+// single `resetArmTimer` slot -- the confirmation flash used to schedule an
+// untracked timeout, so a click during that flash re-armed the button and was
+// then silently disarmed a moment later by the stale timer.
+function setResetState(state, label) {
+  clearTimeout(resetArmTimer);
+  resetArmTimer = null;
+  if (!resetBtn) return;
+  resetBtn.classList.toggle("armed", state === "armed");
+  resetBtn.classList.toggle("done", state === "done");
+  setText(resetBtn, label);
+}
+
+function disarmReset() {
+  setResetState("idle", "RESET");
+}
+
+function resetAllProgress() {
+  try {
+    localStorage.removeItem(MOON_UNLOCK_KEY);
+    localStorage.removeItem(VENUS_UNLOCK_KEY);
+    localStorage.removeItem(PROGRESS_KEY);
+    localStorage.removeItem(SUPER_UNLOCK_KEY);
+  } catch (error) {
+    // Nothing was persisted, so the in-memory flags below are the whole reset.
+  }
+  moonRewardsUnlocked = false;
+  venusRewardsUnlocked = false;
+  unlockedSupers = new Set();
+  persistUnlockedSupers();
+  clearedWave = 0;
+  devGodMode = false;
+  devTimeScale = 1;
+  rewardPreviousWeapon = "blaster";
+  rewardPreviousColor = "#7ef9ff";
+  if (selectedWeapon === "tech0" || selectedWeapon === "magma") selectedWeapon = "blaster";
+  if (playerColor === GREY_SHIP_COLOR || playerColor === MAGMA_SHIP_COLOR) {
+    setPlayerColor("#7ef9ff");
+  }
+  syncMoonRewardUI();
+  syncVenusRewardUI();
+  syncSuperLockUI();
+  refreshLoadoutUI();
+}
+
+if (resetBtn) resetBtn.addEventListener("click", function () {
+  if (!resetBtn.classList.contains("armed")) {
+    setResetState("armed", "SURE?");
+    playSound(300, 0.08, "square");
+    resetArmTimer = setTimeout(disarmReset, 4000);
+    return;
+  }
+  resetAllProgress();
+  setResetState("done", "DONE \u2713");
+  playSound(180, 0.16, "sawtooth");
+  resetArmTimer = setTimeout(disarmReset, 1400);
 });
 document.querySelectorAll(".color-choice").forEach((choice) => choice.addEventListener("click", function () {
-  if (choice.matches("[data-mercury-locked]") && !mercuryRewardsUnlocked) {
-    openMercuryLockPanel(choice);
+  if (choice.matches("[data-moon-locked]") && !moonRewardsUnlocked) {
+    openLockPanel(choice);
+    return;
+  }
+  if (choice.matches("[data-venus-locked]") && !venusRewardsUnlocked) {
+    openLockPanel(choice);
     return;
   }
   setPlayerColor(choice.dataset.color);
@@ -6421,18 +9424,48 @@ document.querySelectorAll(".color-choice").forEach((choice) => choice.addEventLi
 document.getElementById("controls-close").addEventListener("click", function () {
   closeMenuPanel(dom.controlsPanel, controlsReturnTarget || document.getElementById("controls-btn"));
 });
-document.getElementById("weapons-btn").addEventListener("click", function () {
+document.getElementById("levels-btn").addEventListener("click", function () {
+  openLevelsPanel(this);
+});
+document.getElementById("pause-levels-btn").addEventListener("click", function () {
+  openLevelsPanel(this);
+});
+document.getElementById("levels-close").addEventListener("click", function () {
+  closeMenuPanel(dom.levelsPanel, levelsReturnTarget || document.getElementById("levels-btn"));
+});
+document.getElementById("level-prev").addEventListener("click", () => flipLevelPage(-1));
+document.getElementById("level-next").addEventListener("click", () => flipLevelPage(1));
+// One delegated handler: the pages and their tiles are rebuilt on every flip.
+document.getElementById("level-book").addEventListener("click", function (event) {
+  const tile = event.target.closest(".level-tile");
+  if (tile && !levelFlipping) startLevel(tile);
+});
+// The armory is the same panel wherever it is opened from — the menu, the reward
+// card or the victory card — so closing it has to return focus to whichever
+// button asked for it rather than always to the menu's.
+let weaponsReturnTarget = null;
+function openWeaponsPanel(trigger) {
   const panel = document.getElementById("weapons-panel");
+  weaponsReturnTarget = trigger || document.getElementById("weapons-btn");
   bookPage = "primary"; bookPreview = selectedWeapon; renderWeaponBook();
   panel.classList.add("visible");
   panel.setAttribute("aria-hidden", "false");
   focusMenuDefault(panel);
+}
+document.getElementById("weapons-btn").addEventListener("click", function () {
+  openWeaponsPanel(this);
+});
+document.getElementById("reward-armory").addEventListener("click", function () {
+  openWeaponsPanel(this);
+});
+document.getElementById("victory-armory").addEventListener("click", function () {
+  openWeaponsPanel(this);
 });
 document.getElementById("weapons-close").addEventListener("click", function () {
-  closeMenuPanel(dom.weaponsPanel, dom.victoryScreen.classList.contains("visible") ? document.getElementById("victory-continue") : document.getElementById("weapons-btn"));
+  closeMenuPanel(dom.weaponsPanel, weaponsReturnTarget || document.getElementById("weapons-btn"));
 });
-document.getElementById("mercury-lock-close").addEventListener("click", function () {
-  closeMenuPanel(dom.mercuryLockPanel, mercuryLockReturnTarget);
+document.getElementById("moon-lock-close").addEventListener("click", function () {
+  closeMenuPanel(dom.moonLockPanel, moonLockReturnTarget);
 });
 document.getElementById("primary-more-toggle").addEventListener("click", function () {
   setPrimaryGunsExpanded(this.getAttribute("aria-expanded") !== "true");
@@ -6456,19 +9489,31 @@ document.querySelectorAll("[data-audio-mute]").forEach((button) => button.addEve
   if (!audioSettings.muted) playSound(820, 0.08, "square");
 }));
 document.querySelectorAll(".weapon-tile[data-weapon]").forEach((tile) => tile.addEventListener("click", function () {
-  if (tile.matches("[data-mercury-locked]") && !mercuryRewardsUnlocked) {
-    openMercuryLockPanel(tile);
+  if (tile.matches("[data-moon-locked]") && !moonRewardsUnlocked) {
+    openLockPanel(tile);
+    return;
+  }
+  if (tile.matches("[data-venus-locked]") && !venusRewardsUnlocked) {
+    openLockPanel(tile);
     return;
   }
   setSelectedWeapon(tile.dataset.weapon);
 }));
 document.querySelectorAll(".weapon-tile[data-super]").forEach((tile) => tile.addEventListener("click", function () {
+  if (superLocked(tile.dataset.super)) {
+    openLockPanel(tile);
+    return;
+  }
   setSelectedSuper(tile.dataset.super);
 }));
 
 document.querySelectorAll("[data-victory-weapon]").forEach((tile) => tile.addEventListener("click", function () {
-  if (tile.matches("[data-mercury-locked]") && !mercuryRewardsUnlocked) {
-    openMercuryLockPanel(tile);
+  if (tile.matches("[data-moon-locked]") && !moonRewardsUnlocked) {
+    openLockPanel(tile);
+    return;
+  }
+  if (tile.matches("[data-venus-locked]") && !venusRewardsUnlocked) {
+    openLockPanel(tile);
     return;
   }
   setSelectedWeapon(tile.dataset.victoryWeapon);

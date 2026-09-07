@@ -75,6 +75,11 @@ button { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
 }
 .credits-screen.fading { opacity: 0; }
 .credits-screen.gone { display: none; }
+.credits-inner {
+  /* Full width so every line centers against the true page centre, rather
+     than shrink-wrapping to whichever line happens to be widest. */
+  width: 100%;
+}
 .credits-names {
   font-family: var(--pixel);
   font-size: clamp(0.9rem, 3.4vw, 2rem);
@@ -99,6 +104,15 @@ button { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
 .credits-present i:nth-child(3) { animation-delay: 1.5s; }
 .credits-present i:nth-child(4) { animation-delay: 1.75s; }
 .credits-present i:nth-child(5) { animation-delay: 2.0s; }
+.credits-hint {
+  margin-top: 72px;
+  font-family: var(--pixel);
+  font-size: clamp(0.4rem, 1.2vw, 0.65rem);
+  letter-spacing: 3px;
+  color: var(--dim);
+  opacity: 0;
+  animation: creditsIn 0.6s ease-out 1.3s forwards, buttonBlink 1.6s steps(1) 1.3s infinite;
+}
 @keyframes creditsIn { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
 @keyframes dotIn { to { opacity: 1; } }
 
@@ -113,6 +127,41 @@ button { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
   text-align: center;
 }
 .menu-wrap.hidden { display: none; }
+/* Shrink-wraps the title card. The MOON UPDATE badge is positioned against
+   *this* rather than the viewport, so it always sits the same distance from the
+   card's edge instead of drifting into empty space on a wide monitor. It cannot
+   live inside `.title-block` itself: that scrolls (`overflow-y: auto`), which
+   would clip anything hanging outside it. */
+.menu-stage { position: relative; display: flex; }
+/* START fires the drive: the card is pulled into the jump point and blown out
+   with it, clearing the screen just as the punch lands.
+
+   Deliberately opacity + transform ONLY. The first version brightened and
+   blurred the whole wrap, which forces the browser to re-rasterise a
+   full-screen subtree -- a giant Bangers title with text-shadows, a translucent
+   card with three box-shadows -- on every frame of the animation, while the
+   canvas is drawing the wind-up. That is where the hitch came from. These two
+   properties are composited, so the card's exit costs the main thread nothing.
+   `overflow: hidden` on the way out stops the card's own scroll container from
+   re-evaluating a scrollbar as it scales. */
+.menu-wrap.launching { animation: menuLaunch .45s cubic-bezier(.55, 0, .85, .25) forwards; pointer-events: none; }
+.menu-wrap.launching .title-block { animation: menuLaunchBlock .45s cubic-bezier(.55, 0, .85, .25) forwards; overflow: hidden; }
+/* Promoted while the pointer or keyboard is already on the menu, so the layer
+   exists before START is pressed rather than being created on frame one. */
+.menu-wrap:hover .title-block, .menu-wrap:focus-within .title-block { will-change: transform, opacity; }
+@keyframes menuLaunch {
+  0% { opacity: 1; }
+  60% { opacity: .85; }
+  100% { opacity: 0; }
+}
+@keyframes menuLaunchBlock {
+  0% { transform: scale(1); }
+  35% { transform: scale(.94); }
+  100% { transform: scale(1.75); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .menu-wrap.launching, .menu-wrap.launching .title-block { animation: none; opacity: 0; }
+}
 
 .title-block {
   display: flex;
@@ -167,6 +216,31 @@ button { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
   color: #c9c9d6;
   text-shadow: 0 0 2px rgba(255, 255, 255, 0.75), 0 0 14px rgba(190, 190, 200, 0.55);
 }
+/* Build stamp riding the subtitle. Everything is sized in `em` so the chip
+   tracks the subtitle's own clamped type at every viewport instead of needing
+   a second set of breakpoints, and it overrides the subtitle's white glow so
+   the theme colour is not washed out. */
+.dev-tag {
+  display: inline-block;
+  margin-left: .5em;
+  padding: .36em .5em .3em;
+  border: 2px solid rgba(var(--theme-rgb), .7);
+  background: transparent;
+  color: var(--theme);
+  font-family: var(--pixel);
+  font-size: .58em;
+  line-height: 1.2;
+  letter-spacing: 3px;
+  vertical-align: .3em;
+  cursor: pointer;
+  text-shadow: 0 0 8px rgba(var(--theme-rgb), .8);
+  box-shadow: 0 0 12px rgba(var(--theme-rgb), .22), inset 0 0 10px rgba(var(--theme-rgb), .12);
+  animation: devTagPulse 2.6s ease-in-out infinite;
+}
+.dev-tag:hover { background: rgba(var(--theme-rgb), .16); animation: none; opacity: 1; }
+.dev-tag:focus-visible { outline: 2px solid var(--theme); outline-offset: 3px; animation: none; opacity: 1; }
+@keyframes devTagPulse { 0%, 100% { opacity: .72; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .dev-tag { animation: none; opacity: 1; } }
 
 .start-btn {
   margin-top: 40px;
@@ -218,6 +292,12 @@ button { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
   transition: color 0.12s ease, border-color 0.12s ease, background 0.12s ease;
 }
 .controls-btn small { display: block; margin-top: 8px; color: var(--theme); font-size: 0.52rem; letter-spacing: 2px; }
+/* The same control the menu uses, so the reward and victory cards can hand the
+   player straight into the FLIGHT ARMORY instead of only offering the quick
+   picks. Identical shape to .controls-btn, sized for a card. */
+.armory-btn { display: block; width: min(300px, 78vw); margin: 18px auto 4px; padding: 11px 16px; font-family: var(--pixel); font-size: .56rem; letter-spacing: 3px; line-height: 1.6; color: #fff; background: rgba(255, 255, 255, .04); border: 2px solid #45455c; cursor: pointer; transition: color .12s ease, border-color .12s ease, background .12s ease; }
+.armory-btn small { display: block; margin-top: 7px; color: var(--theme); font-size: .46rem; letter-spacing: 2px; }
+.armory-btn:hover, .armory-btn:focus-visible { color: #fff; border-color: var(--theme); background: rgba(var(--theme-rgb), .12); }
 .controls-btn:hover { color: #fff; border-color: var(--theme); background: rgba(var(--theme-rgb), 0.1); }
 
 /* --- Audio controls ---------------------------------------- */
@@ -292,13 +372,25 @@ button:focus-visible, input:focus-visible {
 .color-choice:hover { transform: translateY(-3px); }
 .color-choice.selected { border-color: #fff; box-shadow: 0 0 0 2px #000, 0 0 14px currentColor, 0 4px 0 #fff; }
 .color-choice.cyan { background: #7ef9ff; color: #7ef9ff; }
-.color-choice.red { background: #ff4f4f; color: #ff4f4f; }
+.color-choice.red { background: #ff5040; color: #ff5040; }
 .color-choice.green { background: #63ff91; color: #63ff91; }
 .color-choice.yellow { background: #ffdc5a; color: #ffdc5a; }
 .color-choice.pink { background: #ff72c8; color: #ff72c8; }
 .color-choice.grey { background: #b9b9c0; color: #b9b9c0; }
-.color-choice.locked { position: relative; filter: grayscale(1) brightness(.42); border-color: #656570; }
-.color-choice.locked::after { content: "×"; position: absolute; inset: -2px; display: grid; place-items: center; color: #fff; background: rgba(5, 6, 10, .55); font: 12px/1 var(--pixel); }
+/* Locked rewards keep their own colour, faded behind a dark wash, with a
+   padlock stamped on top. The old treatment was `grayscale(1)` plus a grey x,
+   which told you something was locked but not *what* — every locked reward
+   looked identical. The wash is an inset box-shadow rather than a filter or
+   opacity, because both of those would drag the padlock down with them; an
+   inset shadow paints over the background and under the pseudo-elements. */
+/* One padlock, drawn once as an inline SVG and reused at every size a lock
+   appears at. Built out of two pseudo-elements first — a bordered arch over a
+   rounded box — and it read as a briefcase: the shackle vanished behind the
+   body's outline and nothing about it was crisp. An SVG keeps the outline,
+   shackle and keyhole in correct proportion however small it is drawn. */
+:root { --padlock: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 14"><path d="M3.4 7V4.3a2.6 2.6 0 0 1 5.2 0V7" fill="none" stroke="%2312121a" stroke-width="3.4" stroke-linecap="square"/><path d="M3.4 7V4.3a2.6 2.6 0 0 1 5.2 0V7" fill="none" stroke="%23f4f4fa" stroke-width="1.6" stroke-linecap="square"/><rect x="0.6" y="6.2" width="10.8" height="7.4" fill="%2312121a"/><rect x="1.8" y="7.4" width="8.4" height="5" fill="%23f4f4fa"/><rect x="5.2" y="8.4" width="1.6" height="1.6" fill="%2312121a"/><rect x="5.5" y="9.4" width="1" height="1.8" fill="%2312121a"/></svg>'); }
+.color-choice.locked { position: relative; border-color: #55555f; box-shadow: inset 0 0 0 22px rgba(6, 6, 12, .5); }
+.color-choice.locked::after { content: ""; position: absolute; left: 50%; top: 50%; width: 12px; height: 14px; margin: -7px 0 0 -6px; background: var(--padlock) center/contain no-repeat; filter: drop-shadow(0 1px 0 rgba(0, 0, 0, .55)); }
 .unlock-note { display: block; min-height: 11px; margin-top: 10px; color: #77778c; font-size: .38rem; letter-spacing: 2px; }
 
 .admin-code { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; margin-top: 24px; }
@@ -310,10 +402,81 @@ button:focus-visible, input:focus-visible {
 .admin-code small { width: 100%; min-height: 14px; margin-top: 4px; color: var(--theme); font-family: var(--pixel); font-size: 0.48rem; }
 
 /* --- Modal panels ------------------------------------------ */
-.controls-panel { display: none; position: fixed; inset: 0; z-index: 18; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.82); }
+.controls-panel { display: none; position: fixed; inset: 0; z-index: 21; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.82); }
 .controls-panel.visible { display: flex; }
+/* The Flight Armory's spines and the big weapon/super illustration read as
+   flat art, not a rendering of the live game world, so the CRT scanline
+   overlay (z-index 30, full-screen) crossing over them just looks like a
+   rendering glitch instead of the intended "watching it on a CRT" effect.
+   Lift the armory itself above the overlay so its icons stay fully colored. */
+/* --- LEVELS ------------------------------------------------------------- */
+/* A stage picker built as a book: one page per chapter, each painting that
+   chapter's real sky on a canvas (see paintLevelPreviews). The tiles are the
+   menu's own buttons — same plate, same border, same pixel type — because a
+   picker full of glassy translucent cards read as a different app. */
+.levels-card { width: min(640px, 94vw); max-height: 92vh; overflow-y: auto; text-align: center; }
+#levels-panel.visible { z-index: 31; }
+.level-book { position: relative; height: clamp(226px, 33vh, 272px); perspective: 1400px; overflow: hidden; border: 3px solid #2f2f45; background: #05050c; }
+.level-page { position: absolute; inset: 0; display: flex; flex-direction: column; transform-origin: center center; transition: transform .42s cubic-bezier(.22, .61, .36, 1), opacity .42s ease; will-change: transform, opacity; }
+.level-page > canvas { position: absolute; inset: 0; width: 100%; height: 100%; image-rendering: pixelated; }
+.level-page-inner { position: relative; z-index: 2; display: flex; flex-direction: column; justify-content: center; gap: 4px; height: 100%; padding: 16px 16px 18px; }
+.level-eyebrow { margin: 0; color: rgba(255,255,255,.6); font-family: var(--pixel); font-size: .38rem; letter-spacing: 4px; text-shadow: 2px 2px 0 rgba(0,0,0,.8); }
+.level-planet { margin: 6px 0 16px; font-family: Bangers, Impact, sans-serif; font-size: clamp(1.7rem, 5.5vw, 2.4rem); font-weight: 400; letter-spacing: 3px; color: #fff; text-shadow: 3px 3px 0 rgba(0,0,0,.75); }
 
-.controls-card, .weapons-card, .unlock-card {
+.level-grid { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; }
+/* The menu button, shrunk to a square: same #101019 plate, same 3px border,
+   same lift-and-tint on hover as START / WEAPONS / CONTROLS. */
+.level-tile { display: grid; place-items: center; gap: 4px; width: 72px; height: 72px; padding: 0; color: #8f8fa4; background: #101019; border: 3px solid #2f2f45; font-family: var(--pixel); cursor: pointer; transition: transform .1s steps(2), border-color .12s ease, color .12s ease, box-shadow .15s ease; }
+.level-tile:hover, .level-tile:focus-visible { transform: translateY(-3px); color: #fff; border-color: var(--theme); box-shadow: 0 0 0 2px #05060a, 0 0 18px rgba(var(--theme-rgb), .55); outline: none; }
+.level-number { font-size: .95rem; line-height: 1; letter-spacing: 1px; }
+.level-tile.boss { border-color: #6a3040; }
+.level-tile.boss:hover, .level-tile.boss:focus-visible { border-color: #ff6a5a; box-shadow: 0 0 0 2px #05060a, 0 0 18px rgba(255, 106, 90, .5); }
+.level-tile.boss small { font-size: .3rem; letter-spacing: 2px; color: #ff9c86; }
+/* A stage you have not earned yet keeps its number (or its planet) so you can
+   see what is ahead of you — faded, with the same padlock the ship swatches and
+   armory spines wear. Disabled, so it also drops out of the arrow-key walk. */
+.level-tile.locked { position: relative; border-color: #23233a; background: #0b0b13; cursor: default; }
+.level-tile.locked > * { opacity: .22; }
+.level-tile.locked::after { content: ""; position: absolute; left: 50%; top: 50%; width: 22px; height: 26px; margin: -13px 0 0 -11px; background: var(--padlock) center/contain no-repeat; filter: drop-shadow(0 2px 0 rgba(0, 0, 0, .55)); }
+.level-tile.locked:hover, .level-tile.locked:focus-visible { transform: none; color: #8f8fa4; border-color: #23233a; box-shadow: none; }
+/* The planet itself, lit like the reward-lock spheres, in place of a number. */
+.boss-orb { display: block; width: 34px; height: 34px; border-radius: 50%; }
+/* The picker's Moon, built to match `drawMoon`: the same bone-white body ramp
+   (#fbf8f1 -> #3b3936), the dark maria kept out toward the limb so they frame
+   the face, and three craters. It used to be the grey sphere the old first boss
+   wore, which is a different planet now. */
+.boss-orb.moon { background: none; box-shadow: none; overflow: visible; }
+.boss-orb.moon svg { display: block; width: 100%; height: 100%; filter: drop-shadow(0 0 5px rgba(214, 220, 235, .45)); }
+.boss-orb.venus { background: radial-gradient(circle at 34% 28%, #fff3d2 0 8%, #f0c579 31%, #c07d33 72%, #5c3113 100%); box-shadow: inset -5px -4px 7px rgba(50,16,0,.45), 0 0 14px rgba(255,150,50,.45); }
+
+.level-nav { display: flex; align-items: center; justify-content: center; gap: 18px; margin-top: 16px; }
+/* `display: flex` beats the UA's `[hidden] { display: none }`, so a one-chapter
+   picker needs this to actually drop its arrows and dots. */
+.level-nav[hidden] { display: none; }
+.level-arrow { display: grid; place-items: center; width: 46px; height: 38px; color: #d8d8e6; background: #101019; border: 3px solid #2f2f45; cursor: pointer; transition: color .12s ease, border-color .12s ease; }
+.level-arrow:hover:not(:disabled) { color: var(--theme); border-color: var(--theme); }
+.level-arrow:disabled { opacity: .3; cursor: default; }
+.level-chevron { display: block; width: 10px; height: 10px; border-top: 3px solid currentColor; border-right: 3px solid currentColor; transform: rotate(-135deg); margin-left: 3px; }
+.level-arrow-next .level-chevron { transform: rotate(45deg); margin: 0 3px 0 0; }
+.level-dots { display: flex; gap: 8px; }
+.level-dots i { display: block; width: 9px; height: 9px; background: #2f2f45; }
+.level-dots i.on { background: var(--theme); box-shadow: 0 0 10px rgba(var(--theme-rgb), .7); }
+
+/* Both pages travel together: the incoming one starts offscreen with a slight
+   turn away from the reader and settles as the outgoing one leaves. */
+.level-page.level-enter-right { transform: translateX(102%) rotateY(-26deg); opacity: 0; }
+.level-page.level-enter-left { transform: translateX(-102%) rotateY(26deg); opacity: 0; }
+.level-page.level-leave-left { transform: translateX(-102%) rotateY(26deg); opacity: 0; }
+.level-page.level-leave-right { transform: translateX(102%) rotateY(-26deg); opacity: 0; }
+@media (prefers-reduced-motion: reduce) {
+  .level-page { transition: opacity .18s linear; }
+  .level-page.level-enter-right, .level-page.level-enter-left,
+  .level-page.level-leave-left, .level-page.level-leave-right { transform: none; opacity: 0; }
+}
+
+#weapons-panel.visible { z-index: 31; }
+
+.controls-card, .weapons-card, .unlock-card, .levels-card {
   position: relative;
   padding: 36px 32px 30px;
   border: 3px solid #55556e;
@@ -327,16 +490,23 @@ button:focus-visible, input:focus-visible {
 .unlock-card > p { margin: 18px 0 12px; color: #8e8e9e; font-size: .46rem; letter-spacing: 4px; }
 .unlock-card h2 { margin: 0 0 18px; color: #e2e2e7; font-size: 1rem; font-weight: 400; letter-spacing: 4px; text-shadow: 3px 3px 0 #313138; }
 .unlock-card > small { color: #aaaab7; font-size: .7rem; line-height: 1.7; }
-.lock-mercury { position: relative; width: 82px; height: 82px; margin: 0 auto; border: 3px solid #d9d9df; border-radius: 50%; background: radial-gradient(circle at 34% 28%, #eeeef1 0 8%, #b9b9c0 31%, #77777f 72%, #37373d 100%); box-shadow: inset -11px -10px 15px rgba(0,0,0,.3), 0 0 22px rgba(190,190,205,.28); }
-.lock-mercury::before, .lock-mercury::after { content: ""; position: absolute; top: 29px; width: 18px; height: 6px; border-radius: 50%; border-top: 4px solid #25252b; }
-.lock-mercury::before { left: 14px; transform: rotate(12deg); }
-.lock-mercury::after { right: 14px; transform: rotate(-12deg); }
-.lock-mercury i { position: absolute; border-radius: 50%; background: rgba(45,45,50,.24); box-shadow: inset 2px 2px 3px rgba(0,0,0,.24); }
-.lock-mercury i:first-child { width: 14px; height: 11px; left: 11px; top: 12px; }
-.lock-mercury i:nth-child(2) { width: 11px; height: 9px; right: 10px; bottom: 15px; }
-.lock-mercury b { position: absolute; left: 28px; top: 52px; width: 26px; height: 8px; border-top: 4px solid #2d2d34; border-radius: 50%; }
+.lock-moon { position: relative; width: 82px; height: 82px; margin: 0 auto; border: 3px solid #d9d9df; border-radius: 50%; background: radial-gradient(circle at 34% 28%, #eeeef1 0 8%, #b9b9c0 31%, #77777f 72%, #37373d 100%); box-shadow: inset -11px -10px 15px rgba(0,0,0,.3), 0 0 22px rgba(190,190,205,.28); }
+.lock-moon::before, .lock-moon::after { content: ""; position: absolute; top: 29px; width: 18px; height: 6px; border-radius: 50%; border-top: 4px solid #25252b; }
+.lock-moon::before { left: 14px; transform: rotate(12deg); }
+.lock-moon::after { right: 14px; transform: rotate(-12deg); }
+.lock-moon i { position: absolute; border-radius: 50%; background: rgba(45,45,50,.24); box-shadow: inset 2px 2px 3px rgba(0,0,0,.24); }
+.lock-moon i:first-child { width: 14px; height: 11px; left: 11px; top: 12px; }
+.lock-moon i:nth-child(2) { width: 11px; height: 9px; right: 10px; bottom: 15px; }
+.lock-moon b { position: absolute; left: 28px; top: 52px; width: 26px; height: 8px; border-top: 4px solid #2d2d34; border-radius: 50%; }
+/* Venus variant of the reward-lock planet, so a "beat Venus" prompt never
+   wears the Moon's face. Toggled on .unlock-card by openLockPanel. */
+.unlock-card.venus .lock-moon { border-color: #f4d69a; background: radial-gradient(circle at 34% 28%, #fff3d2 0 8%, #f0c579 31%, #c07d33 72%, #5c3113 100%); box-shadow: inset -11px -10px 15px rgba(50,16,0,.35), 0 0 22px rgba(255,150,50,.35); }
+.unlock-card.venus .lock-moon::before, .unlock-card.venus .lock-moon::after { border-top-color: #3a1608; }
+.unlock-card.venus .lock-moon i { background: rgba(120,60,20,.24); box-shadow: inset 2px 2px 3px rgba(50,16,0,.3); }
+.unlock-card.venus .lock-moon b { border-top-color: #3a1608; }
+.unlock-card.venus h2 { color: #ffcf8e; text-shadow: 3px 3px 0 #4a2408; }
 
-.controls-card h2, .weapons-card h2 {
+.controls-card h2, .weapons-card h2, .levels-card h2 {
   margin-bottom: 24px;
   color: var(--theme);
   font-family: var(--pixel);
@@ -354,47 +524,83 @@ button:focus-visible, input:focus-visible {
 .controls-close { position: absolute; top: 6px; right: 12px; border: 0; background: transparent; color: var(--dim); font-size: 1.8rem; line-height: 1; cursor: pointer; }
 .controls-close:hover { color: var(--red); }
 
-/* --- Change log -------------------------------------------- */
-.changelog-btn {
+/* --- Menu corner marks -------------------------------------- */
+/* The ALPHA stamp and the reset button are one matched pair in the two
+   bottom corners. Both are real buttons -- ALPHA opens the alpha card, the
+   twin of the chip on the title. They share a fixed box so neither one changes size or
+   jumps when its label does, and they sit above the menu card so a short
+   viewport can never bury the reset button under the title block. */
+.alpha-tag,
+.reset-btn {
   position: fixed;
-  left: 24px;
   bottom: 22px;
-  padding: 10px 12px;
-  color: #fff;
+  z-index: 4;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 104px;
+  min-height: 40px;
+  margin: 0;
+  padding: 0 12px;
   background: rgba(7, 7, 13, 0.82);
   border: 2px solid #55556e;
   font-family: var(--pixel);
   font-size: 0.48rem;
+  line-height: 1;
   letter-spacing: 2px;
-  cursor: pointer;
+  text-align: center;
 }
-.changelog-btn span { color: var(--theme); }
-.changelog-btn:hover { border-color: var(--theme); background: rgba(var(--theme-rgb), 0.1); }
-.changelog-card {
-  position: relative;
-  width: min(680px, 92vw);
-  max-height: 88vh;
-  overflow: hidden;
-  padding: 38px 42px 34px;
-  color: #cfcfda;
-  background: #08080f;
-  border: 3px solid rgba(var(--theme-rgb), 0.58);
-  box-shadow: 0 0 0 3px #000, 0 0 42px rgba(var(--theme-rgb), 0.22);
-}
-.changelog-card h2 { margin: 8px 0 16px; color: #fff; font-family: var(--pixel); font-size: 1rem; font-weight: 400; letter-spacing: 5px; text-align: center; }
-.changelog-lead { margin: 0 auto 20px; max-width: 540px; color: #9a9aad; font-size: 0.85rem; line-height: 1.6; text-align: center; }
-.changelog-history { max-height: min(58vh, 560px); overflow-y: auto; padding: 2px 14px 8px 2px; scrollbar-color: var(--theme) #171720; scrollbar-width: thin; }
-.changelog-history:focus-visible { outline: 2px solid var(--theme); outline-offset: 3px; }
-.changelog-history::-webkit-scrollbar { width: 8px; }
-.changelog-history::-webkit-scrollbar-track { background: #171720; }
-.changelog-history::-webkit-scrollbar-thumb { background: var(--theme); }
-.changelog-release + .changelog-release { margin-top: 30px; padding-top: 28px; border-top: 3px solid rgba(var(--theme-rgb), .38); }
-.changelog-version { margin: 0; color: var(--theme); font-family: var(--pixel); font-size: 0.48rem; letter-spacing: 4px; text-align: center; }
-.changelog-release-intro { margin: 10px auto 2px; color: #cfcfda; font-size: .82rem; line-height: 1.55; text-align: center; }
-.changelog-release section { margin-top: 20px; padding-top: 18px; border-top: 1px solid #323244; }
-.changelog-card h3 { margin-bottom: 10px; color: var(--theme); font-family: var(--pixel); font-size: 0.56rem; font-weight: 400; letter-spacing: 3px; }
-.changelog-card ul { padding-left: 20px; }
-.changelog-card li { margin: 8px 0; color: #b8b8c8; font-size: 0.82rem; line-height: 1.55; }
+.alpha-tag { left: 24px; color: var(--theme); border-color: rgba(var(--theme-rgb), .5); cursor: pointer; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+.alpha-tag:hover { color: #fff; border-color: var(--theme); background: rgba(var(--theme-rgb), .14); box-shadow: 0 0 12px rgba(var(--theme-rgb), .25); }
+.alpha-tag:focus-visible { outline: 2px solid var(--theme); outline-offset: 3px; }
+/* Wears the ship colour at rest so it matches the ALPHA stamp opposite it.
+   The armed and done states deliberately break out of the theme -- red for
+   "this is about to wipe your progress", green for "it did" -- because those
+   two are warnings, not decoration, and must read the same on every swatch. */
+.reset-btn { right: 24px; color: var(--theme); border-color: rgba(var(--theme-rgb), .55); cursor: pointer; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+.reset-btn:hover { color: #fff; border-color: var(--theme); background: rgba(var(--theme-rgb), .14); box-shadow: 0 0 12px rgba(var(--theme-rgb), .25); }
+.reset-btn:focus-visible { outline: 2px solid var(--theme); outline-offset: 3px; }
+.reset-btn.armed { color: #fff; border-color: #ff4f4f; background: rgba(255, 79, 79, .22); }
+.reset-btn.done { color: #fff; border-color: #63ff91; background: rgba(99, 255, 145, .18); }
+
+/* --- Alpha card --------------------------------------------- */
+/* Opened by either ALPHA mark. It is a read-only explainer, so it leans on
+   rhythm rather than controls: an eyebrow over the heading, a chapter meter,
+   then three short sections each hung off a themed rule.
+
+   Every rule below carries both `.controls-card` and `.alpha-card` on purpose.
+   This card borrows the shared `.controls-card` shell, and `.controls-card p`
+   is written for the CONTROLS key/action list -- pixel font, 16px margins, and
+   a two-column grid at phone width, which squeezed these paragraphs into a 42%
+   column. Double-classing outranks all of it without touching CONTROLS; drop a
+   class from any selector here and that list's styling bleeds back in. */
+.controls-card.alpha-card { width: min(620px, 92vw); padding: 28px 30px 22px; text-align: left; }
+.controls-card.alpha-card p { display: block; font-family: "Segoe UI", "Arial", sans-serif; }
+.controls-card.alpha-card .alpha-eyebrow { margin: 0 0 8px; color: #6f6f82; font-family: var(--pixel); font-size: .4rem; letter-spacing: 4px; text-align: center; }
+.controls-card.alpha-card h2 { margin-bottom: 14px; }
+.controls-card.alpha-card .alpha-lead { margin: 0 auto 20px; max-width: 470px; color: #b6b6c6; font-size: .82rem; line-height: 1.6; text-align: center; }
+
+/* Chapter meter: eleven pips, two lit. It is the honest version of a progress
+   bar -- the Moon pip sits first and unlit because that chapter is not built
+   either, which a bare "2/11" bar would quietly round away. */
+.alpha-progress { margin: 0 0 22px; padding: 16px 0; border-top: 2px solid #2b2b3d; border-bottom: 2px solid #2b2b3d; }
+/* The finished planet is the LEVELS picker's own Moon portrait; the eleven still
+   to come are empty rings with a question mark, not filled dots. */
+.alpha-pips { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 9px; }
+.alpha-pips i { display: grid; place-items: center; width: 26px; height: 26px; border: 2px solid rgba(255, 255, 255, .2); border-radius: 50%; background: rgba(255, 255, 255, .02); color: #6f6a7d; font-family: var(--pixel); font-size: .42rem; font-style: normal; line-height: 1; }
+.alpha-pips i.alpha-pip-moon { border: 0; background: none; padding: 0; filter: drop-shadow(0 0 8px rgba(255, 255, 255, .28)); }
+.alpha-pips i.alpha-pip-moon svg { display: block; width: 30px; height: 30px; }
+.controls-card.alpha-card .alpha-progress-label { margin: 12px 0 0; color: var(--theme); font-family: var(--pixel); font-size: .42rem; letter-spacing: 3px; text-align: center; }
+
+.alpha-section { margin: 0 0 18px; padding-left: 14px; border-left: 3px solid rgba(var(--theme-rgb), .45); }
+.alpha-section h3 { margin: 0 0 8px; color: var(--theme); font-family: var(--pixel); font-size: .48rem; font-weight: 400; letter-spacing: 3px; }
+.controls-card.alpha-card .alpha-section p { margin: 0; color: #a8a8ba; font-size: .82rem; line-height: 1.65; }
+
+.controls-card.alpha-card .alpha-thanks { margin: 22px 0 18px; padding: 14px 16px; background: rgba(var(--theme-rgb), .07); border: 2px solid rgba(var(--theme-rgb), .28); color: #d2d2e0; font-size: .82rem; line-height: 1.6; text-align: center; }
+.alpha-dismiss { display: block; width: 100%; padding: 13px; border: 2px solid var(--theme); background: rgba(var(--theme-rgb), .12); color: var(--theme); font-family: var(--pixel); font-size: .52rem; letter-spacing: 3px; cursor: pointer; }
+.alpha-dismiss:hover { color: #05060a; background: var(--theme); }
+.alpha-dismiss:focus-visible { outline: 2px solid var(--theme); outline-offset: 3px; }
 
 /* --- Weapon selector --------------------------------------- */
 .loadout-section { margin-bottom: 22px; padding: 16px 14px 18px; border: 2px solid #2b2b3d; background: rgba(255, 255, 255, 0.015); }
@@ -431,15 +637,22 @@ button:focus-visible, input:focus-visible {
 .weapon-tile.selected .projectile-preview { opacity: 1; transform: scale(1.08); }
 .weapon-tile.selected small { color: #a9a9bd; }
 .unlock-badge { display: none; position: absolute; z-index: 2; top: -3px; left: -3px; right: -3px; padding: 5px 0; color: #e5e5ea; background: #555561; font-family: var(--pixel); font-size: .4rem; letter-spacing: 2px; }
-.weapon-tile.locked { color: #666675; filter: grayscale(.65); background: repeating-linear-gradient(135deg, #101019 0 8px, #15151f 8px 16px); }
+.weapon-tile.locked { color: #666675; background: repeating-linear-gradient(135deg, #101019 0 8px, #15151f 8px 16px); }
 .weapon-tile.locked .unlock-badge { display: block; }
 .weapon-tile.locked .tile-badge { display: none; }
-.weapon-tile.locked .projectile-preview { opacity: .2; }
+/* Faded, not drained: at .2 opacity under a grey filter you could not tell
+   Tech.0's bolt from Magma's rock, which is exactly what a player deciding
+   whether a reward is worth chasing needs to see. */
+.weapon-tile.locked .projectile-preview { opacity: .5; filter: saturate(.75) brightness(.9); }
+/* The padlock over the icon. Two pseudo-elements — shackle and body — and it
+   must not reach the armory spines, which use the same two for their bands. */
+.weapon-tile.locked:not(.weapon-book *)::after { content: ""; position: absolute; left: 50%; top: 34px; z-index: 3; width: 22px; height: 26px; margin-left: -11px; pointer-events: none; background: var(--padlock) center/contain no-repeat; filter: drop-shadow(0 2px 0 rgba(0, 0, 0, .5)); }
 
 .weapon-tile[data-weapon="blaster"], .victory-choice[data-victory-weapon="blaster"] { --loadout-color: #ffdc5a; --loadout-rgb: 255, 220, 90; }
 .weapon-tile[data-weapon="charge"], .victory-choice[data-victory-weapon="charge"] { --loadout-color: #ff8a32; --loadout-rgb: 255, 138, 50; }
 .weapon-tile[data-weapon="cone"], .victory-choice[data-victory-weapon="cone"] { --loadout-color: #63ff91; --loadout-rgb: 99, 255, 145; }
 .weapon-tile[data-weapon="tech0"], .victory-choice[data-victory-weapon="tech0"] { --loadout-color: #63f7ff; --loadout-rgb: 99, 247, 255; }
+.weapon-tile[data-weapon="magma"], .victory-choice[data-victory-weapon="magma"] { --loadout-color: #ff5040; --loadout-rgb: 255, 80, 64; }
 .weapon-tile[data-super="bomb"], .victory-choice[data-victory-super="bomb"] { --loadout-color: #4d9dff; --loadout-rgb: 77, 157, 255; }
 .weapon-tile[data-super="invincibility"], .victory-choice[data-victory-super="invincibility"] { --loadout-color: #ffe36a; --loadout-rgb: 255, 227, 106; }
 .weapon-tile[data-super="lance"], .victory-choice[data-victory-super="lance"] { --loadout-color: #9d7bff; --loadout-rgb: 157, 123, 255; }
@@ -477,6 +690,17 @@ button:focus-visible, input:focus-visible {
 .tech0-preview::before { z-index: 1; width: 24px; height: 34px; left: 18px; top: 7px; background: #63f7ff; clip-path: polygon(55% 0, 100% 0, 68% 37%, 94% 37%, 24% 100%, 43% 54%, 8% 54%); filter: drop-shadow(0 0 5px #63f7ff); }
 .tech0-preview::after { display: none; }
 .tech0-preview i { display: none; }
+/* Magma: a chunk of black crust split by glowing fissures, heat bloom behind it,
+   two lava droplets flung off the bottom edge. */
+.magma-preview::before { width: 40px; height: 40px; left: 9px; top: 2px; border-radius: 50%; background: radial-gradient(circle, rgba(255, 122, 42, .6), rgba(255, 80, 64, .25) 45%, transparent 70%); filter: blur(2px); }
+/* One solid molten body. The old version stacked three thin linear-gradient
+   "cracks" over the rock; at the armory's 2.2x scale those stopped reading as
+   cracks and became hard diagonal bands across the icon. Shading is radial
+   only, so it stays clean at every size it is drawn at. */
+.magma-preview::after { z-index: 1; width: 30px; height: 30px; left: 14px; top: 5px; background: radial-gradient(circle at 36% 30%, #ffd28c 0%, #ffa447 22%, #ff6f3a 52%, #e8401c 78%, #a72a10 100%); clip-path: polygon(50% 0, 86% 18%, 100% 58%, 74% 100%, 30% 96%, 0 60%, 16% 14%); box-shadow: inset 0 4px 7px rgba(255, 226, 176, .3), inset 0 -6px 9px rgba(120, 24, 6, .55); filter: drop-shadow(0 0 7px #ff5040); }
+.magma-preview i { z-index: 2; background: linear-gradient(#fff3d6, #ff7a2a 45%, #c22a12); border-radius: 50% 50% 50% 50% / 30% 30% 70% 70%; filter: drop-shadow(0 0 4px #ff5040); }
+.magma-preview i:nth-child(1) { width: 8px; height: 11px; left: 39px; top: 33px; transform: rotate(-24deg); }
+.magma-preview i:nth-child(2) { width: 6px; height: 8px; left: 13px; top: 36px; transform: rotate(20deg); }
 .bomb-preview::after { width: 27px; height: 27px; left: 16px; top: 10px; border-radius: 50%; background: var(--loadout-color); box-shadow: 0 0 18px var(--loadout-color); }
 .shield-preview::after { width: 40px; height: 44px; left: 9px; top: 2px; background: linear-gradient(145deg, #fff 0 8%, var(--loadout-color) 32%, rgba(var(--loadout-rgb), .42)); clip-path: polygon(50% 0, 94% 16%, 84% 70%, 50% 100%, 16% 70%, 6% 16%); filter: drop-shadow(0 0 9px var(--loadout-color)); }
 .shield-preview::before { z-index: 1; width: 20px; height: 20px; left: 19px; top: 13px; background: linear-gradient(#fff, #fff) center/5px 20px no-repeat, linear-gradient(#fff, #fff) center/20px 5px no-repeat; filter: drop-shadow(0 0 4px rgba(0, 0, 0, .65)); }
@@ -486,18 +710,115 @@ button:focus-visible, input:focus-visible {
 /* The six supers from the design sheet. Each icon is the silhouette the super
    actually draws on the canvas, so the armory page and the fight agree. */
 .star-preview::after { width: 42px; height: 42px; left: 8px; top: 3px; background: radial-gradient(circle at 50% 45%, #fff 12%, var(--loadout-color) 46%, #d38f00); clip-path: polygon(50% 0, 61% 35%, 98% 35%, 68% 57%, 79% 92%, 50% 70%, 21% 92%, 32% 57%, 2% 35%, 39% 35%); filter: drop-shadow(0 0 10px var(--loadout-color)); }
-.mirror-preview::after { width: 34px; height: 40px; left: 12px; top: 4px; background: linear-gradient(120deg, rgba(var(--loadout-rgb), .25) 0 38%, #fff 44%, rgba(var(--loadout-rgb), .8) 50%, rgba(var(--loadout-rgb), .3) 62%); clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%); border: 0; filter: drop-shadow(0 0 8px var(--loadout-color)); }
-.mirror-preview i { z-index: 1; width: 8px; height: 20px; left: 25px; top: 14px; background: linear-gradient(#fff, var(--loadout-color)); clip-path: polygon(50% 0, 100% 45%, 60% 45%, 60% 100%, 40% 100%, 40% 45%, 0 45%); transform: rotate(38deg); }
-.drone-preview::after { z-index: 1; width: 26px; height: 40px; left: 16px; top: 4px; background: linear-gradient(180deg, #fff 0 10%, var(--loadout-color) 40%, #7a2703); clip-path: polygon(50% 0, 100% 42%, 82% 100%, 18% 100%, 0 42%); filter: drop-shadow(0 0 8px var(--loadout-color)); }
-.drone-preview i { width: 30px; height: 3px; left: 14px; top: 24px; background: rgba(var(--loadout-rgb), .85); border-radius: 3px; }
-.drone-preview i:nth-child(1) { transform: rotate(34deg); }
-.drone-preview i:nth-child(2) { transform: rotate(-34deg); }
+/* Mirror: the hex ring drawMirrorShield() spins around the ship — a bright
+   faceted rim over dark glass, a double specular shine so it reads as a
+   mirrored surface rather than a slab, and a shot kicking off the top-right
+   edge. The old icon was a flat grey hexagon: the loadout cyan never showed
+   because the gradient was mostly white and 25%-alpha fill, and the deflected
+   bolt was buried inside the body where nothing could see it. */
+.mirror-preview::before { width: 38px; height: 44px; left: 10px; top: 2px; background: linear-gradient(150deg, #fff 0 7%, var(--loadout-color) 25%, #3fc4ec 56%, #10708f 100%); clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%); filter: drop-shadow(0 0 9px var(--loadout-color)); }
+.mirror-preview::after { z-index: 1; width: 28px; height: 32px; left: 15px; top: 8px; background: linear-gradient(150deg, rgba(var(--loadout-rgb), .62), rgba(9, 52, 71, .82) 54%, rgba(var(--loadout-rgb), .5)); clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%); }
+.mirror-preview i:nth-child(1) { z-index: 2; width: 28px; height: 32px; left: 15px; top: 8px; background: linear-gradient(116deg, transparent 20%, rgba(255, 255, 255, .95) 25% 34%, transparent 39%, transparent 52%, rgba(255, 255, 255, .62) 56% 61%, transparent 66%); clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%); }
+.mirror-preview i:nth-child(2) { z-index: 3; width: 11px; height: 15px; left: 44px; top: 2px; background: linear-gradient(#fff 0 32%, var(--loadout-color) 100%); clip-path: polygon(50% 0, 100% 42%, 68% 42%, 68% 100%, 32% 100%, 32% 42%, 0 42%); transform: rotate(45deg); filter: drop-shadow(0 0 5px var(--loadout-color)); }
+/* Drone: the warhead drawDrone() flies — the same pentagon hull traced from
+   its canvas path, built up in the same three layers (dark hull edge, orange
+   body, pale core with a white sensor eye) and wrapped in its four-spoke
+   rotor. The old icon lost the rotor entirely and hung its two fins outside
+   the hull at left:2px/left:46px, where they read as loose debris rather than
+   as part of the machine. */
+.drone-preview::before { width: 42px; height: 42px; left: 8px; top: 6px; border-radius: 50%; filter: drop-shadow(0 0 4px var(--loadout-color)); background: radial-gradient(circle closest-side, transparent 87%, rgba(var(--loadout-rgb), .85) 90% 96%, transparent 99%), conic-gradient(transparent 0 40deg, #ffe0b5 40deg 50deg, transparent 50deg 130deg, #ffe0b5 130deg 140deg, transparent 140deg 220deg, #ffe0b5 220deg 230deg, transparent 230deg 310deg, #ffe0b5 310deg 320deg, transparent 320deg 360deg); mask: radial-gradient(circle closest-side, transparent 41%, #000 45%); -webkit-mask: radial-gradient(circle closest-side, transparent 41%, #000 45%); }
+.drone-preview i:nth-child(1) { z-index: 1; width: 30px; height: 44px; left: 14px; top: 2px; background: #2a0c02; clip-path: polygon(50% 0%, 100% 56%, 84% 100%, 16% 100%, 0% 56%); }
+.drone-preview::after { z-index: 2; width: 25px; height: 38px; left: 16.5px; top: 5px; background: linear-gradient(180deg, #fff 0 6%, #ffc98f 20%, var(--loadout-color) 50%, #c4430a 100%); clip-path: polygon(50% 0%, 100% 56%, 84% 100%, 16% 100%, 0% 56%); filter: drop-shadow(0 0 9px var(--loadout-color)); }
+.drone-preview i:nth-child(2) { z-index: 3; width: 12px; height: 18px; left: 23px; top: 9px; background: radial-gradient(circle at 50% 74%, #fff 0 25%, transparent 27%), linear-gradient(180deg, #fff 0 28%, #ffd9a0 100%); clip-path: polygon(50% 0%, 100% 56%, 84% 100%, 16% 100%, 0% 56%); }
 .decoy-preview::after { width: 34px; height: 42px; left: 12px; top: 3px; background: linear-gradient(180deg, rgba(var(--loadout-rgb), .95), rgba(var(--loadout-rgb), .35)); clip-path: polygon(50% 0, 100% 100%, 50% 78%, 0 100%); filter: drop-shadow(0 0 9px var(--loadout-color)); }
 .decoy-preview i { z-index: 1; width: 34px; height: 42px; left: 12px; top: 3px; background: repeating-linear-gradient(180deg, transparent 0 3px, rgba(4, 20, 12, .75) 3px 5px); clip-path: polygon(50% 0, 100% 100%, 50% 78%, 0 100%); }
 .firstaid-preview::after { width: 40px; height: 40px; left: 9px; top: 4px; border-radius: 7px; background: linear-gradient(160deg, #fff2f5 0 12%, var(--loadout-color) 45%, #a01f3d); filter: drop-shadow(0 0 9px var(--loadout-color)); }
 .firstaid-preview::before { z-index: 1; width: 26px; height: 26px; left: 16px; top: 11px; background: linear-gradient(#fff, #fff) center/8px 26px no-repeat, linear-gradient(#fff, #fff) center/26px 8px no-repeat; }
 .orb-preview::after { z-index: 1; width: 26px; height: 26px; left: 16px; top: 11px; border-radius: 50%; background: radial-gradient(circle at 45% 40%, #fff 20%, #fff3c4 38%, var(--loadout-color) 62%, #ff6a10); filter: drop-shadow(0 0 12px var(--loadout-color)); }
 .orb-preview i { width: 46px; height: 46px; left: 6px; top: 1px; background: conic-gradient(from 0deg, rgba(var(--loadout-rgb), .9) 0 6deg, transparent 6deg 45deg, rgba(var(--loadout-rgb), .9) 45deg 51deg, transparent 51deg 90deg, rgba(var(--loadout-rgb), .9) 90deg 96deg, transparent 96deg 135deg, rgba(var(--loadout-rgb), .9) 135deg 141deg, transparent 141deg 180deg, rgba(var(--loadout-rgb), .9) 180deg 186deg, transparent 186deg 225deg, rgba(var(--loadout-rgb), .9) 225deg 231deg, transparent 231deg 270deg, rgba(var(--loadout-rgb), .9) 270deg 276deg, transparent 276deg 315deg, rgba(var(--loadout-rgb), .9) 315deg 321deg, transparent 321deg 360deg); border-radius: 50%; mask: radial-gradient(circle, transparent 26%, #000 30%); -webkit-mask: radial-gradient(circle, transparent 26%, #000 30%); }
+
+/* --- MOON UPDATE badge -------------------------------------------------- */
+/* The menu's announcement for chapter 1. The art is `MOON_ORB_SVG` — the very
+   same portrait the LEVELS picker and the ALPHA panel use, traced from
+   `drawMoon`'s own coordinates — injected by main.js. It is deliberately not a
+   hand-built CSS lookalike: the first version was, and it drifted from the real
+   body straight away, reading as a different character to the one you fight.
+   Non-interactive on purpose; it is a sign, not a control. */
+.moon-promo {
+  position: absolute;
+  top: 50%;
+  left: 100%;
+  margin-left: clamp(30px, 3.4vw, 72px);
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  pointer-events: none;
+  text-align: center;
+  animation: moonPromoIn .6s cubic-bezier(.2, 1.3, .4, 1) both;
+}
+@keyframes moonPromoIn { from { opacity: 0; transform: translateY(-50%) scale(.86); } to { opacity: 1; transform: translateY(-50%) scale(1); } }
+
+.moon-promo-art {
+  width: clamp(132px, 13.5vw, 196px);
+  aspect-ratio: 1;
+  filter: drop-shadow(0 0 26px rgba(186, 214, 255, .34));
+  animation: moonPromoFloat 5.2s ease-in-out infinite;
+}
+.moon-promo-art svg { display: block; width: 100%; height: 100%; }
+@keyframes moonPromoFloat { 0%, 100% { transform: translateY(0) rotate(-1.5deg); } 50% { transform: translateY(-9px) rotate(1.5deg); } }
+
+.moon-promo-kicker {
+  margin: 0;
+  font-family: var(--pixel);
+  font-size: clamp(.44rem, .9vw, .58rem);
+  letter-spacing: 3px;
+  color: #e6e3db;
+  text-shadow: 0 0 12px rgba(210, 226, 255, .5);
+}
+.moon-promo-live {
+  display: flex; align-items: center; gap: 8px;
+  margin: 0; padding: 7px 13px;
+  font-family: var(--pixel);
+  font-size: clamp(.4rem, .8vw, .5rem);
+  letter-spacing: 3px;
+  color: var(--theme);
+  border: 2px solid rgba(var(--theme-rgb), .55);
+  background: rgba(var(--theme-rgb), .1);
+  box-shadow: 0 0 14px rgba(var(--theme-rgb), .22);
+}
+.moon-promo-live i {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--theme);
+  box-shadow: 0 0 8px var(--theme);
+  animation: moonPromoPing 1.5s steps(1) infinite;
+}
+@keyframes moonPromoPing { 0%, 55% { opacity: 1; } 56%, 100% { opacity: .18; } }
+
+/* Narrow screens have no room beside the card, so it becomes a strip along the
+   top instead of being dropped — a phone should still be told what shipped.
+   Everything in that strip is nowrap: it has exactly one line to work in. */
+@media (max-width: 900px) {
+  .moon-promo {
+    position: fixed;
+    top: max(10px, env(safe-area-inset-top));
+    left: 50%;
+    margin-left: 0;
+    transform: translateX(-50%);
+    flex-direction: row;
+    gap: 10px;
+    animation: none;
+  }
+  .moon-promo-art { width: 42px; animation: none; }
+  .moon-promo-kicker, .moon-promo-live { white-space: nowrap; }
+  .moon-promo-kicker { font-size: .38rem; letter-spacing: 1.5px; }
+  .moon-promo-live { padding: 5px 8px; font-size: .34rem; letter-spacing: 1.5px; gap: 5px; }
+  .moon-promo-live i { width: 6px; height: 6px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .moon-promo, .moon-promo-art, .moon-promo-live i { animation: none; }
+}
 
 /* --- Loading ------------------------------------------------ */
 .loading-screen { position: fixed; inset: 0; z-index: 10; background: #000; display: flex; align-items: center; justify-content: center; }
@@ -596,17 +917,85 @@ button:focus-visible, input:focus-visible {
 
 .boss-health { display: none; position: absolute; top: 72px; left: 50%; width: min(460px, 70vw); transform: translateX(-50%); color: #c8c8cf; font-size: 0.62rem; letter-spacing: 5px; text-align: center; text-shadow: 0 0 12px rgba(200, 200, 210, 0.72); }
 .boss-health.visible { display: block; }
-.boss-track { height: 14px; margin-top: 8px; border: 2px solid #a9a9b2; background: rgba(190, 190, 202, 0.08); }
-.boss-fill { width: 0%; height: 100%; background: repeating-linear-gradient(90deg, #c8c8cf 0 6px, #777780 6px 9px); box-shadow: 0 0 14px rgba(190, 190, 205, 0.64); }
+/* Three phases, three chops. The notches sit at the exact thirds `phaseFor()`
+   splits on, so where the bar breaks and where the fight escalates are the same
+   place — and the fill recolours as each one is passed. */
+.boss-track { position: relative; height: 16px; margin-top: 8px; border: 2px solid #a9a9b2; background: rgba(190, 190, 202, 0.08); }
+/* Each chop is a dark core with a bright edge either side, so it reads both
+   against the fill and against the empty track behind it. */
+.boss-track::after {
+  content: ""; position: absolute; inset: -2px; pointer-events: none;
+  background:
+    linear-gradient(90deg, transparent calc(33.33% - 4px), #cfcfd8 calc(33.33% - 4px), #cfcfd8 calc(33.33% - 2px), #07070b calc(33.33% - 2px), #07070b calc(33.33% + 2px), #cfcfd8 calc(33.33% + 2px), #cfcfd8 calc(33.33% + 4px), transparent calc(33.33% + 4px)),
+    linear-gradient(90deg, transparent calc(66.66% - 4px), #cfcfd8 calc(66.66% - 4px), #cfcfd8 calc(66.66% - 2px), #07070b calc(66.66% - 2px), #07070b calc(66.66% + 2px), #cfcfd8 calc(66.66% + 2px), #cfcfd8 calc(66.66% + 4px), transparent calc(66.66% + 4px));
+}
+.boss-fill { width: 0%; height: 100%; background: repeating-linear-gradient(90deg, #c8c8cf 0 6px, #777780 6px 9px); box-shadow: 0 0 14px rgba(190, 190, 205, 0.64); transition: background .3s steps(3), box-shadow .3s ease; }
+.boss-health[data-phase="2"] .boss-fill { background: repeating-linear-gradient(90deg, #dfe7ff 0 6px, #7b86a8 6px 9px); box-shadow: 0 0 16px rgba(190, 210, 255, .7); }
+.boss-health[data-phase="3"] .boss-fill { background: repeating-linear-gradient(90deg, #fffdf2 0 6px, #b9b3d8 6px 9px); box-shadow: 0 0 20px rgba(255, 253, 235, .85); }
+.boss-health[data-phase="3"] { color: #fffdf2; text-shadow: 0 0 14px rgba(255, 250, 220, .9); }
+.boss-health[data-phase="3"] .boss-track { border-color: #efeade; }
 .boss-health.filling .boss-fill { animation: bossHealthFill 1.6s steps(24) forwards; }
 @keyframes bossHealthFill { from { width: 0%; } to { width: 100%; } }
+/* Venus wears its own furnace palette so the bar belongs to whichever planet
+   is in the arena. Toggled by enterBossArea alongside .visible. */
+.boss-health.venus { color: #ffd9a0; text-shadow: 0 0 12px rgba(255, 150, 50, 0.8); }
+.boss-health.venus .boss-track { border-color: #e89a4a; background: rgba(255, 140, 40, 0.1); }
+.boss-health.venus .boss-fill { background: repeating-linear-gradient(90deg, #ffcf7a 0 6px, #c96b23 6px 9px); box-shadow: 0 0 14px rgba(255, 150, 50, 0.7); }
 
 .damage-flash { position: fixed; inset: 0; z-index: 8; pointer-events: none; background: rgba(255, 0, 0, 0.42); opacity: 0; }
 .damage-flash.active { animation: damageFlash 0.28s steps(4); }
 @keyframes damageFlash { 0% { opacity: 0; } 25% { opacity: 1; } 100% { opacity: 0; } }
 
-.test-damage { display: none; position: absolute; top: 150px; left: 50%; transform: translateX(-50%); color: var(--amber); font-size: 0.62rem; }
-.test-damage.visible { display: block; }
+/* --- BUILDER console ---------------------------------------- */
+/* A dev tool, so it looks like one: monospace, no arcade type, and pinned to a
+   corner rather than centred, because it has to be usable while the game runs
+   underneath it. Above every panel (z-index 40) so it can be opened over a
+   boss card, and `pointer-events` stay on only for the console itself. */
+/* `display: flex` below beats the UA's `[hidden] { display: none }`, exactly as
+   it does for `.level-nav`, so toggling `el.hidden` moves the property and
+   nothing else. Without this line the backtick key "does nothing". */
+.builder[hidden] { display: none; }
+.builder {
+  position: fixed;
+  z-index: 40;
+  right: 14px;
+  bottom: 14px;
+  display: flex;
+  flex-direction: column;
+  width: min(560px, calc(100vw - 28px));
+  max-height: min(60vh, 460px);
+  border: 2px solid #3f9a72;
+  background: rgba(4, 10, 8, .93);
+  color: #cfe9dd;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  box-shadow: 0 0 0 2px #000, 0 12px 40px rgba(0, 0, 0, .6);
+}
+.builder-bar { display: flex; align-items: center; gap: 10px; padding: 5px 8px; border-bottom: 1px solid #24503d; background: rgba(28, 78, 58, .5); }
+.builder-title { color: #7df0b6; font-weight: 700; letter-spacing: 2px; }
+.builder-hint { flex: 1; color: #5f8a78; font-size: 11px; }
+.builder-hint b { color: #9fd8bf; font-weight: 700; }
+.builder-close { border: 0; background: transparent; color: #6f9c8a; font-size: 17px; line-height: 1; cursor: pointer; }
+.builder-close:hover { color: #ff8a8a; }
+.builder-watch[hidden] { display: none; }
+.builder-watch { padding: 6px 10px; border-bottom: 1px solid #24503d; color: #ffd98a; white-space: pre-wrap; word-break: break-word; }
+.builder-log { flex: 1; overflow-y: auto; padding: 8px 10px; white-space: pre-wrap; word-break: break-word; }
+.builder-log div { margin: 1px 0; }
+.builder-log .b-in { color: #7df0b6; }
+.builder-log .b-err { color: #ff9c8f; }
+.builder-log .b-note { color: #6f9c8a; }
+.builder-log .b-key { color: #9fd8ff; }
+.builder-ghost { padding: 0 10px; min-height: 16px; color: #557f6d; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.builder-input { display: flex; align-items: center; gap: 7px; padding: 6px 10px 8px; border-top: 1px solid #24503d; }
+.builder-caret { color: #7df0b6; }
+.builder-input input { flex: 1; border: 0; background: transparent; color: #eafff5; font: inherit; outline: none; }
+.builder-log::-webkit-scrollbar { width: 8px; }
+.builder-log::-webkit-scrollbar-track { background: #0a1611; }
+.builder-log::-webkit-scrollbar-thumb { background: #2f6b51; }
+@media (max-width: 700px) {
+  .builder { right: 8px; left: 8px; bottom: 8px; width: auto; max-height: 52vh; font-size: 13px; }
+}
 
 /* --- Pause -------------------------------------------------- */
 .pause-screen { display: none; position: fixed; inset: 0; z-index: 14; align-items: center; justify-content: center; background: rgba(2, 2, 6, 0.86); }
@@ -648,19 +1037,80 @@ button:focus-visible, input:focus-visible {
 .pause-audio .audio-toggle:hover, .pause-audio.expanded .audio-toggle { border-color: var(--theme); background: rgba(var(--theme-rgb), 0.1); }
 
 /* --- Boss intro --------------------------------------------- */
-.boss-intro { display: none; position: fixed; inset: 0; z-index: 15; align-items: center; justify-content: center; background: #07010d; color: #fff; text-align: center; }
+/* The pre-fight card is a versus screen: your ship on the left, the boss's own
+   portrait on the right, VS between them. The background is a scrim, not a fill —
+   the canvas is still painting the star field you are about to fight in. */
+.boss-intro { display: none; position: fixed; inset: 0; z-index: 15; align-items: center; justify-content: center; background: radial-gradient(ellipse at 50% 45%, rgba(10, 6, 18, .35), rgba(3, 1, 8, .9) 76%); color: #fff; text-align: center; }
 .boss-intro.visible { display: flex; }
-.boss-intro-card { width: min(760px, 100%); max-height: calc(100dvh - 32px); overflow-y: auto; padding: 24px 12px; font-family: var(--pixel); font-size: clamp(1rem, min(4vw, 6vh), 2.6rem); letter-spacing: clamp(1px, .4vw, 5px); overflow-wrap: anywhere; }
-.versus { margin: 22px 0; color: var(--red); font-size: .5em; text-shadow: 0 0 18px var(--red); animation: loadPulse 1s steps(1) infinite; }
-.mercury-name { color: #b9b9c6; text-shadow: 4px 4px 0 #26262e, 0 0 18px rgba(200, 200, 220, .5); }
-.boss-intro button { margin-top: 40px; padding: 16px 34px; color: #fff; background: #181018; border: 3px solid #ff4f91; font-family: var(--pixel); font-size: 0.7rem; letter-spacing: 3px; cursor: pointer; }
+.boss-intro-card { position: relative; width: 100%; height: 100%; font-family: var(--pixel); letter-spacing: clamp(1px, .4vw, 4px); overflow: hidden; }
+.boss-intro-card::-webkit-scrollbar { width: 0; height: 0; }
+/* The card is only type and a button: the two fighters are drawn on the canvas
+   behind it by drawVersusStage(), with the real ship and the real planet. These
+   anchors match the marks that function uses (26% / 74% across, 42% down), so
+   the names sit under their own fighter at any viewport size. */
+.versus-name { position: absolute; top: 63%; width: 40%; font-size: clamp(.7rem, 2.6vw, 1.15rem); line-height: 1.5; color: #f1f0f6; }
+.versus-sub { position: absolute; top: calc(63% + clamp(26px, 4vw, 40px)); width: 40%; font-size: clamp(.34rem, 1.3vw, .46rem); line-height: 1.8; letter-spacing: 2px; color: #8f8a9c; }
+.versus-name-left, .versus-sub-left { left: 6%; }
+.versus-name-right, .versus-sub-right { left: 54%; }
+/* VS: the headline of the screen, not a label between two labels. */
+.versus-big {
+  position: absolute; left: 50%; top: 42%; transform: translate(-50%, -50%);
+  font-family: Bangers, Impact, sans-serif;
+  font-size: clamp(4rem, 15vw, 11rem); line-height: 1; letter-spacing: 6px;
+  color: #ff2a44;
+  text-shadow: 0 0 0 #000, 5px 5px 0 #2a0006, -3px -3px 0 #2a0006, 0 0 38px rgba(255, 42, 68, .85), 0 0 90px rgba(255, 42, 68, .45);
+}
+.versus-actions { position: absolute; left: 0; right: 0; bottom: clamp(6%, 9vh, 12%); }
+.boss-intro .key-hint { margin-top: 12px; }
+/* Entrance, cut against the canvas: the names arrive with their fighter, VS
+   slams into the tear once it has opened. */
+.boss-intro.visible .versus-name-left, .boss-intro.visible .versus-sub-left { animation: versusInLeft .5s cubic-bezier(.2, 1.3, .4, 1) .1s both; }
+.boss-intro.visible .versus-name-right, .boss-intro.visible .versus-sub-right { animation: versusInRight .5s cubic-bezier(.2, 1.3, .4, 1) .1s both; }
+.boss-intro.visible .versus-big { animation: versusSlam .45s cubic-bezier(.2, 1.7, .35, 1) .5s both, versusThrob 1.6s ease-in-out .95s infinite; }
+.boss-intro.visible .versus-actions { animation: versusFade .4s ease-out 1s both; }
+@keyframes versusInLeft { from { opacity: 0; transform: translateX(-70px); } to { opacity: 1; transform: none; } }
+@keyframes versusInRight { from { opacity: 0; transform: translateX(70px); } to { opacity: 1; transform: none; } }
+@keyframes versusSlam {
+  0% { opacity: 0; transform: translate(-50%, -50%) scale(4.2) rotate(-9deg); }
+  62% { opacity: 1; transform: translate(-50%, -50%) scale(.86) rotate(2deg); }
+  100% { opacity: 1; transform: translate(-50%, -50%) scale(1) rotate(0); }
+}
+@keyframes versusThrob {
+  0%, 100% { text-shadow: 5px 5px 0 #2a0006, -3px -3px 0 #2a0006, 0 0 38px rgba(255, 42, 68, .85), 0 0 90px rgba(255, 42, 68, .45); }
+  50% { text-shadow: 5px 5px 0 #2a0006, -3px -3px 0 #2a0006, 0 0 54px rgba(255, 42, 68, 1), 0 0 130px rgba(255, 42, 68, .7); }
+}
+@keyframes versusFade { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .boss-intro.visible .versus-name-left, .boss-intro.visible .versus-sub-left,
+  .boss-intro.visible .versus-name-right, .boss-intro.visible .versus-sub-right,
+  .boss-intro.visible .versus-big, .boss-intro.visible .versus-actions { animation: none; }
+}
+/* While a full-screen card is up the HUD is not: the wave counter, score,
+   hearts, meters, boss bar and wave banner all belong to the fight, not to the
+   card announcing or ending it. */
+.game-ui.versus .hud, .game-ui.versus .boss-health, .game-ui.versus .super-meter,
+.game-ui.versus .charge-meter, .game-ui.versus .hud-loadout, .game-ui.versus .wave-banner { display: none; }
+.moon-name { color: #d3d2dc; text-shadow: 4px 4px 0 #1c1c22, 0 0 18px rgba(200, 200, 220, .5); }
+.boss-intro button { margin-top: 24px; padding: 14px 32px; color: #fff; background: #181018; border: 3px solid #ff4f91; font-family: var(--pixel); font-size: 0.62rem; letter-spacing: 3px; cursor: pointer; transition: transform .08s steps(2), filter .15s ease; }
 .boss-intro button:hover { background: #ff4f91; color: #14000a; }
 
 .key-hint { margin-top: 20px; color: var(--dim); font-family: var(--pixel); font-size: 0.5rem; letter-spacing: 3px; animation: loadPulse 1.4s steps(1) infinite; }
 .key-hint span { color: var(--amber); }
 
 /* --- Victory ------------------------------------------------ */
-.victory-screen { display: none; position: fixed; inset: 0; z-index: 16; align-items: center; justify-content: center; overflow: hidden; background: radial-gradient(ellipse at 50% 38%, #24252a 0%, #0b0c10 56%, #000 100%); color: #fff; text-align: center; }
+/* MOON DESTROYED happens in the same sky the chapter was flown in — the
+   canvas keeps painting it, so this is a scrim, not a backdrop. */
+/* The run is over: hearts, wave, score, the super meter and the touch controls
+   all belong to a live run, and behind the victory and thanks cards they only
+   leak the HUD into the artwork. The arena itself (ship, moon, debris) stays. */
+.game-ui.run-complete .hud,
+.game-ui.run-complete .super-meter,
+.game-ui.run-complete .charge-meter,
+.game-ui.run-complete .boss-health,
+.game-ui.run-complete .mobile-pause-btn,
+.game-ui.run-complete .mobile-controls { display: none; }
+
+.victory-screen { display: none; position: fixed; inset: 0; z-index: 16; align-items: center; justify-content: center; overflow: hidden; background: radial-gradient(ellipse at 50% 38%, rgba(16, 17, 22, .34) 0%, rgba(4, 5, 9, .82) 62%, rgba(0, 0, 0, .92) 100%); color: #fff; text-align: center; }
 .victory-screen.visible { display: flex; }
 .victory-rays {
   position: absolute;
@@ -677,7 +1127,7 @@ button:focus-visible, input:focus-visible {
   content: "";
   position: absolute;
   inset: 0;
-  background: radial-gradient(ellipse at center, rgba(0, 0, 0, 0.82) 0%, rgba(0, 0, 0, 0.55) 42%, rgba(0, 0, 0, 0.15) 100%);
+  background: radial-gradient(ellipse at center, rgba(0, 0, 0, 0.62) 0%, rgba(0, 0, 0, 0.34) 42%, rgba(0, 0, 0, 0.08) 100%);
   pointer-events: none;
 }
 .heart-mini {
@@ -690,17 +1140,46 @@ button:focus-visible, input:focus-visible {
 }
 :root[data-quality="potato"] .victory-rays { display: none; }
 
-.victory-card { position: relative; z-index: 1; width: min(620px, 92vw); max-height: 94vh; overflow-y: auto; padding: 30px 26px; font-family: var(--pixel); }
-.victory-mercury { position: relative; width: 104px; height: 104px; margin: 0 auto 20px; overflow: visible; border: 3px solid #dedee4; border-radius: 50%; background: radial-gradient(circle at 35% 28%, #ededf0 0 8%, #b9b9c0 30%, #77777f 72%, #37373d 100%); box-shadow: inset -14px -12px 18px rgba(0, 0, 0, .3), 0 0 28px rgba(200, 200, 212, .34); animation: badgePop 0.7s cubic-bezier(.2, 1.4, .4, 1) both, defeatedFloat 2.4s ease-in-out .7s infinite; }
-.victory-mercury::before, .victory-mercury::after { content: ""; position: absolute; border-radius: 50%; background: rgba(45, 45, 50, .24); box-shadow: inset 2px 2px 3px rgba(0, 0, 0, .24); }
-.victory-mercury::before { width: 18px; height: 14px; left: 15px; top: 18px; }
-.victory-mercury::after { width: 13px; height: 11px; right: 13px; bottom: 22px; }
-.dead-eye { position: absolute; z-index: 2; top: 28px; color: #1d1d22; font-family: var(--pixel); font-size: 1.35rem; line-height: 1; text-shadow: 1px 1px 0 #e4e4e8; }
-.dead-eye-left { left: 18px; }
-.dead-eye-right { right: 18px; }
-.dead-mouth { position: absolute; z-index: 2; left: 31px; top: 65px; width: 42px; height: 19px; border-radius: 48%; background: #29272b; box-shadow: inset 0 4px 0 #111115; }
-.dead-tongue { position: absolute; z-index: 3; left: 43px; top: 74px; width: 24px; height: 25px; border-radius: 5px 5px 13px 13px; background: #ba667a; border: 2px solid #442832; transform-origin: 50% 0; animation: deadTongue 1.05s ease-in-out infinite; }
-.dead-tongue::after { content: ""; position: absolute; left: 10px; top: 5px; width: 2px; height: 13px; background: rgba(92, 38, 53, .5); }
+.victory-card { position: relative; z-index: 1; width: min(620px, 92vw); max-height: calc(100dvh - 28px); overflow-y: auto; padding: 24px 22px; font-family: var(--pixel); border: 3px solid rgba(var(--theme-rgb), .45); background: rgba(4, 3, 9, .68); box-shadow: 0 0 0 3px rgba(0, 0, 0, .85), 0 0 34px rgba(var(--theme-rgb), .18), inset 0 0 46px rgba(var(--theme-rgb), .05); }
+/* The real Moon, not a grey ball: cool bluish-grey highlands, three dark maria
+   blotches and a scatter of craters, all stacked radial-gradients on the one
+   element so the face (eyes, mouth, tongue) still sits on top of it untouched.
+   Limb darkening comes from the body gradient's last stop plus the inset
+   shadow, which is what makes it read as a sphere rather than a disc. */
+.victory-moon {
+  /* One knob: `font-size` is the moon's diameter and the whole face is drawn in
+     `em` of it, so the eyes and tongue cannot slide off the sphere when a
+     breakpoint shrinks it — which is exactly what they used to do. */
+  position: relative; font-size: 104px; width: 1em; height: 1em; margin: 0 auto 20px; overflow: visible;
+  border: 2px solid #cfd0d8; border-radius: 50%;
+  background:
+    radial-gradient(circle at 70% 22%, rgba(255,255,255,.3) 0 8%, rgba(34,34,42,.34) 9% 15%, rgba(0,0,0,0) 16%),
+    radial-gradient(circle at 26% 62%, rgba(255,255,255,.26) 0 6%, rgba(34,34,42,.3) 7% 12%, rgba(0,0,0,0) 13%),
+    radial-gradient(circle at 54% 78%, rgba(255,255,255,.24) 0 5%, rgba(34,34,42,.28) 6% 10%, rgba(0,0,0,0) 11%),
+    radial-gradient(circle at 82% 56%, rgba(34,34,42,.24) 0 6%, rgba(0,0,0,0) 7%),
+    radial-gradient(circle at 44% 16%, rgba(34,34,42,.2) 0 5%, rgba(0,0,0,0) 6%),
+    radial-gradient(ellipse 26% 20% at 63% 40%, rgba(76,78,92,.62), rgba(0,0,0,0) 72%),
+    radial-gradient(ellipse 22% 17% at 33% 34%, rgba(84,86,100,.55), rgba(0,0,0,0) 72%),
+    radial-gradient(ellipse 30% 18% at 52% 68%, rgba(72,74,88,.5), rgba(0,0,0,0) 74%),
+    radial-gradient(circle at 34% 28%, #f3f4f7 0 9%, #d5d6dd 30%, #a7a8b3 58%, #6d6e79 82%, #3a3b45 100%);
+  box-shadow: inset -13px -11px 20px rgba(0, 0, 0, .38), inset 6px 5px 14px rgba(255, 255, 255, .18), 0 0 30px rgba(200, 200, 212, .3);
+  animation: badgePop 0.7s cubic-bezier(.2, 1.4, .4, 1) both, defeatedFloat 2.4s ease-in-out .7s infinite;
+}
+/* Two big named craters keep their own rims — a lit edge on the sunward side
+   and a shadow opposite, which the flat gradient craters above cannot do. */
+.victory-moon::before, .victory-moon::after { content: ""; position: absolute; border-radius: 50%; background: rgba(58, 59, 70, .3); box-shadow: inset 2px 2px 3px rgba(0, 0, 0, .35), inset -1px -1px 2px rgba(255, 255, 255, .3); }
+.victory-moon::before { width: .164em; height: .144em; left: .135em; top: .154em; }
+.victory-moon::after { width: .115em; height: .106em; right: .115em; bottom: .192em; }
+/* `em` inside these resolves against the eye's own font-size, so the offsets are
+   in eye units, not disc units: at .2em that is a fifth of what it reads as. The
+   face sits on the disc's centre line — eyes at 34% down, a fifth in from each
+   side, mouth just below the middle. */
+.dead-eye { position: absolute; z-index: 2; top: 30%; width: 24%; color: #1d1d22; font-family: var(--pixel); font-size: .19em; line-height: 1; text-align: center; text-shadow: 1px 1px 0 #e4e4e8; }
+.dead-eye-left { left: 18%; }
+.dead-eye-right { right: 18%; }
+.dead-mouth { position: absolute; z-index: 2; left: 30%; top: 56%; width: 40%; height: 18%; border-radius: 48%; background: #29272b; box-shadow: inset 0 2px 0 #111115; }
+.dead-tongue { position: absolute; z-index: 3; left: 40%; top: 64%; width: 23%; height: 24%; border-radius: 3px 3px 8px 8px; background: #ba667a; border: 1px solid #442832; transform-origin: 50% 0; animation: deadTongue 1.05s ease-in-out infinite; }
+.dead-tongue::after { content: ""; position: absolute; left: 46%; top: 14%; width: 8%; height: 52%; background: rgba(92, 38, 53, .5); }
 @keyframes deadTongue {
   0%, 100% { transform: scaleY(.76) rotate(7deg); }
   45%, 68% { transform: scaleY(1) rotate(7deg); }
@@ -715,6 +1194,15 @@ button:focus-visible, input:focus-visible {
 .victory-stats { display: flex; justify-content: center; gap: 12px; margin: 28px auto 4px; animation: victoryIn .5s ease-out .24s both; }
 .victory-stat { flex: 1; max-width: 170px; padding: 14px 8px; border: 2px solid #4b4b54; background: rgba(24, 24, 29, 0.78); }
 .victory-stat span { display: block; font-size: 0.44rem; letter-spacing: 3px; color: #888892; }
+/* The run's last beat, on its own card: the victory screen reports the fight,
+   this one says where the game stops and hands back the only way out. Kept
+   deliberately bare — no stats, no loadout, one button. */
+.thanks-screen .victory-card { width: min(520px, 92vw); padding: 40px 30px 30px; }
+.thanks-eyebrow { margin: 0 0 16px; color: #6f6f82; font-family: var(--pixel); font-size: .4rem; letter-spacing: 4px; }
+.thanks-title { margin: 0 0 20px; color: var(--theme); font-family: var(--pixel); font-size: clamp(.72rem, 2.6vw, 1rem); font-weight: 400; letter-spacing: 4px; line-height: 2; text-shadow: 3px 3px 0 rgba(0, 0, 0, .8); }
+.thanks-pips { margin: 0 0 24px; }
+.thanks-copy { margin: 0 auto 14px; max-width: 470px; color: #b3b3c4; font-family: var(--pixel); font-size: .42rem; letter-spacing: 2px; line-height: 2.1; }
+.thanks-copy-quiet { margin-bottom: 28px; color: #86829a; }
 .victory-stat strong { display: block; margin-top: 10px; font-size: 0.85rem; font-weight: 400; color: #e1e1e6; }
 .victory-stat strong.bonus { color: #c9c9d0; text-shadow: 0 0 14px rgba(200, 200, 212, .54); }
 .victory-screen .heart-mini { background: #bfc0c7; filter: drop-shadow(0 0 6px rgba(195, 195, 206, .6)); }
@@ -723,7 +1211,7 @@ button:focus-visible, input:focus-visible {
 .victory-loadout { margin: 26px auto 4px; width: min(560px, 88vw); animation: victoryIn .5s ease-out .36s both; }
 .victory-loadout-label { color: var(--theme); font-size: .52rem; letter-spacing: 3px; margin-bottom: 12px; text-shadow: 0 0 10px rgba(var(--theme-rgb), .42); }
 .victory-loadout-row { display: flex; gap: 8px; justify-content: center; margin: 10px 0; }
-.victory-choice { flex: 1; min-height: 44px; padding: 8px 6px; border: 2px solid #33334a; color: #7c7c93; background: #101016; font-family: var(--pixel); font-size: .48rem; cursor: pointer; transition: color .12s ease, border-color .12s ease, box-shadow .15s ease, background .15s ease; }
+.victory-choice { flex: 1; min-height: 44px; padding: 8px 6px; border: 2px solid #33334a; color: #9a9ab0; background: linear-gradient(rgba(255, 255, 255, .05), rgba(0, 0, 0, .3)), #0b0a12; font-family: var(--pixel); font-size: .48rem; cursor: pointer; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .7); transition: color .12s ease, border-color .12s ease, box-shadow .15s ease, background .15s ease; }
 .victory-choice:hover { color: #fff; border-color: #6f6f8c; }
 .victory-choice[data-victory-weapon], .victory-choice[data-victory-super] { border-color: rgba(var(--loadout-rgb), .3); }
 .victory-choice[data-victory-weapon]:hover, .victory-choice[data-victory-super]:hover { color: var(--loadout-color); border-color: var(--loadout-color); }
@@ -733,15 +1221,44 @@ button:focus-visible, input:focus-visible {
 
 .victory-card > button { margin-top: 30px; padding: 16px 40px; color: #05060a; background: var(--theme); border: 3px solid var(--theme); font-family: var(--pixel); font-size: 0.72rem; letter-spacing: 3px; cursor: pointer; box-shadow: 0 0 28px rgba(var(--theme-rgb), .45); transition: transform 0.08s steps(2), filter .15s ease; }
 .victory-card > button:hover { transform: translate(3px, 3px); filter: brightness(1.15); }
+/* The card now hides its scrollbar, so it has to actually fit: on a short
+   viewport the pay-off (CONTINUE) was scrolling off the bottom edge with no
+   visible affordance to say so. Everything above it shrinks instead. */
+@media (max-height: 880px) {
+  .victory-card { padding: 16px 18px; }
+  .victory-moon { font-size: 74px; margin-bottom: 12px; }
+  .victory-title { font-size: clamp(1rem, 3.4vw, 1.7rem); line-height: 1.35; letter-spacing: 4px; }
+  .victory-player { margin-top: 10px; }
+  .victory-stats { margin: 16px auto 4px; }
+  .victory-stat { padding: 9px 8px; }
+  .victory-stat strong { margin-top: 6px; font-size: .72rem; }
+  .victory-loadout { margin: 14px auto 4px; }
+  .victory-loadout-label { margin-bottom: 8px; }
+  .victory-loadout-row { margin: 7px 0; gap: 6px; }
+  .armory-btn { margin-bottom: 10px; padding: 8px 14px; }
+  .armory-btn small { margin-top: 5px; }
+  .victory-card > button { margin-top: 14px; padding: 12px 32px; }
+  .key-hint { margin-top: 8px; }
+}
+@media (max-height: 700px) {
+  .victory-moon { font-size: 68px; }
+  .victory-title { letter-spacing: 3px; }
+  .victory-stat { padding: 7px 6px; }
+  .victory-loadout-row { margin: 5px 0; }
+}
 
-/* --- Mercury defeat ---------------------------------------- */
-.mercury-defeat-screen { display: none; position: fixed; inset: 0; z-index: 17; align-items: center; justify-content: center; overflow: hidden; background: radial-gradient(ellipse at 50% 35%, #3a1821 0%, #13080c 52%, #020102 100%); color: #fff; text-align: center; }
-.mercury-defeat-screen.visible { display: flex; }
-.defeat-card { width: min(560px, 90vw); padding: 34px 28px; font-family: var(--pixel); }
-.laughing-mercury { position: relative; width: 126px; height: 126px; margin: 0 auto 26px; border: 4px solid #e4e4e8; border-radius: 50%; background: radial-gradient(circle at 35% 28%, #f0f0f2 0 8%, #b9b9c0 30%, #77777f 72%, #37373d 100%); box-shadow: inset -17px -14px 20px rgba(0, 0, 0, .34), 0 0 34px rgba(255, 79, 91, .32); animation: mercuryLaugh .46s ease-in-out infinite alternate; }
-.laughing-mercury::before, .laughing-mercury::after { content: ""; position: absolute; border-radius: 50%; background: rgba(45, 45, 50, .24); box-shadow: inset 2px 2px 3px rgba(0, 0, 0, .24); }
-.laughing-mercury::before { width: 20px; height: 15px; left: 17px; top: 18px; }
-.laughing-mercury::after { width: 15px; height: 12px; right: 15px; bottom: 25px; }
+/* --- Moon defeat ---------------------------------------- */
+/* The planet on this card is drawn on the canvas by drawBossPortrait(), the same
+   way the fight draws it — so the screen is a scrim over it, and the card starts
+   below the portrait's mark rather than covering it. */
+.moon-defeat-screen { display: none; position: fixed; inset: 0; z-index: 17; align-items: flex-start; justify-content: center; overflow: hidden; background: radial-gradient(ellipse at 50% 27%, rgba(58, 24, 33, .15) 0%, rgba(12, 6, 12, .82) 46%, rgba(2, 1, 2, .95) 100%); color: #fff; text-align: center; }
+.moon-defeat-screen.visible { display: flex; }
+.defeat-card { width: min(560px, 90vw); padding: 20px 28px clamp(24px, 6vh, 56px); font-family: var(--pixel); }
+.moon-defeat-screen .laughing-moon { display: none; }
+.laughing-moon { position: relative; width: 126px; height: 126px; margin: 0 auto 26px; border: 4px solid #e4e4e8; border-radius: 50%; background: radial-gradient(circle at 35% 28%, #f0f0f2 0 8%, #b9b9c0 30%, #77777f 72%, #37373d 100%); box-shadow: inset -17px -14px 20px rgba(0, 0, 0, .34), 0 0 34px rgba(255, 79, 91, .32); animation: moonLaugh .46s ease-in-out infinite alternate; }
+.laughing-moon::before, .laughing-moon::after { content: ""; position: absolute; border-radius: 50%; background: rgba(45, 45, 50, .24); box-shadow: inset 2px 2px 3px rgba(0, 0, 0, .24); }
+.laughing-moon::before { width: 20px; height: 15px; left: 17px; top: 18px; }
+.laughing-moon::after { width: 15px; height: 12px; right: 15px; bottom: 25px; }
 .evil-brow { position: absolute; z-index: 4; top: 29px; width: 34px; height: 8px; border-radius: 6px; background: #17171c; box-shadow: 0 2px 0 rgba(255, 65, 82, .32); }
 .evil-brow-left { left: 15px; transform: rotate(17deg); }
 .evil-brow-right { right: 15px; transform: rotate(-17deg); }
@@ -752,7 +1269,7 @@ button:focus-visible, input:focus-visible {
 .laugh-mouth::before { content: ""; position: absolute; z-index: 1; left: 0; right: 0; top: 0; height: 16px; background: #f4f1e9; clip-path: polygon(0 0, 100% 0, 100% 52%, 88% 100%, 76% 52%, 64% 100%, 52% 52%, 40% 100%, 28% 52%, 16% 100%, 0 52%); }
 .laugh-mouth::after { content: ""; position: absolute; z-index: 1; left: 0; right: 0; bottom: 0; height: 11px; background: #f4f1e9; clip-path: polygon(0 100%, 100% 100%, 100% 48%, 86% 0, 72% 48%, 58% 0, 44% 48%, 30% 0, 16% 48%, 0 0); }
 .laugh-mouth i { position: absolute; z-index: 2; left: 12px; bottom: -2px; width: 30px; height: 15px; border-radius: 50% 50% 4px 4px; background: #c86880; }
-@keyframes mercuryLaugh { from { transform: translateY(0) rotate(-2deg); } to { transform: translateY(-8px) rotate(2deg); } }
+@keyframes moonLaugh { from { transform: translateY(0) rotate(-2deg); } to { transform: translateY(-8px) rotate(2deg); } }
 @keyframes laughMouth { from { transform: scaleY(.86); } to { transform: scaleY(1.08); } }
 @keyframes evilSquint { from { scale: 1 1; } to { scale: 1 .72; } }
 .defeat-title { color: #ff5b69; font-size: clamp(1.25rem, 4.8vw, 2.5rem); letter-spacing: 6px; text-shadow: 4px 4px 0 #4b1118, 0 0 24px rgba(255, 79, 91, .7); }
@@ -901,15 +1418,35 @@ button:focus-visible, input:focus-visible {
   .title-block { width: 100%; max-height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 20px); padding: 22px 14px 66px; background: rgba(4, 2, 8, .76); -webkit-overflow-scrolling: touch; }
   .title { font-size: clamp(3.5rem, 24vw, 7rem); letter-spacing: 4px; }
   .subtitle { margin-top: 10px; font-size: clamp(.5rem, 3vw, .72rem); letter-spacing: 3px; }
+  .dev-tag { margin-left: .45em; letter-spacing: 2px; }
   .start-btn { margin-top: 28px; width: min(280px, 82vw); padding: 16px 24px; }
   .controls-btn, .audio-controls { width: min(300px, 86vw); }
   .color-options { gap: 10px; }
   .unlock-note { line-height: 1.6; }
-  .changelog-btn { left: max(12px, env(safe-area-inset-left)); bottom: max(12px, env(safe-area-inset-bottom)); padding: 9px 10px; font-size: .4rem; }
+  /* Keep the pair the same size as each other on touch, and keep the reset
+     button a real 44px target rather than shrinking with the type. */
+  .alpha-tag, .reset-btn { bottom: max(12px, env(safe-area-inset-bottom)); min-width: 92px; min-height: 44px; padding: 0 10px; font-size: .4rem; }
+  .alpha-tag { left: max(12px, env(safe-area-inset-left)); }
+  .reset-btn { right: max(12px, env(safe-area-inset-right)); }
 
-  .controls-panel, .pause-screen, .boss-intro, .victory-screen, .mercury-defeat-screen { padding: max(10px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right)) max(10px, env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left)); }
-  .controls-card, .weapons-card, .unlock-card, .pause-card { width: 100%; max-height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 20px); overflow-y: auto; -webkit-overflow-scrolling: touch; }
+  .controls-panel, .pause-screen, .boss-intro, .victory-screen, .moon-defeat-screen { padding: max(10px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right)) max(10px, env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left)); }
+  .controls-card, .weapons-card, .unlock-card, .pause-card, .levels-card { width: 100%; max-height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 20px); overflow-y: auto; -webkit-overflow-scrolling: touch; }
+  .level-book { height: clamp(210px, 40vh, 260px); }
+  .level-grid { gap: 8px; }
+  .level-tile { width: 62px; height: 62px; border-width: 2px; }
+  .level-page-inner { padding: 14px 10px 16px; }
+  .level-planet { margin-bottom: 12px; }
+  .level-number { font-size: .8rem; }
+  .boss-orb { width: 28px; height: 28px; }
   .controls-card { padding: 34px 20px 24px; }
+  .controls-card.alpha-card { padding: 32px 16px 20px; }
+  .controls-card.alpha-card .alpha-lead, .controls-card.alpha-card .alpha-section p, .controls-card.alpha-card .alpha-thanks { font-size: .8rem; }
+  .controls-card.alpha-card .alpha-eyebrow { font-size: .36rem; letter-spacing: 2px; }
+  .controls-card.alpha-card .alpha-progress-label { font-size: .38rem; letter-spacing: 2px; }
+  .alpha-section h3 { font-size: .44rem; letter-spacing: 2px; }
+  .alpha-pips { gap: 6px; }
+  .alpha-pips i { width: 21px; height: 21px; font-size: .36rem; }
+  .alpha-pips i.alpha-pip-moon svg { width: 25px; height: 25px; }
   .controls-card p { display: grid; grid-template-columns: minmax(112px, 42%) 1fr; gap: 8px; align-items: center; margin: 12px 0; font-size: .48rem; }
   .controls-card p span { width: auto; }
   .weapons-card { padding: 34px 12px 24px; }
@@ -919,10 +1456,6 @@ button:focus-visible, input:focus-visible {
   .weapon-tile strong { font-size: .5rem; }
   .weapon-tile small { font-size: .54rem; }
   .extra-primary-guns .weapon-grid { grid-template-columns: minmax(140px, 180px); }
-
-  .changelog-card { width: 100%; max-height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 20px); padding: 34px 18px 22px; }
-  .changelog-card li { font-size: .76rem; }
-  .changelog-history { max-height: calc(100dvh - 180px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); padding-right: 10px; }
 
   .hud { padding: calc(14px + env(safe-area-inset-top)) max(14px, env(safe-area-inset-right)) 0 max(14px, env(safe-area-inset-left)); }
   .hud-label { font-size: .38rem; letter-spacing: 2px; }
@@ -946,7 +1479,7 @@ button:focus-visible, input:focus-visible {
   .key-hint { display: none; }
 
   .victory-card { width: 100%; max-height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 20px); padding: 22px 10px; -webkit-overflow-scrolling: touch; }
-  .victory-mercury { margin-bottom: 12px; }
+  .victory-moon { margin-bottom: 12px; }
   .victory-title { letter-spacing: 4px; }
   .victory-player { margin-top: 10px; }
   .victory-stats { gap: 6px; margin-top: 18px; }
@@ -959,7 +1492,7 @@ button:focus-visible, input:focus-visible {
   .victory-card > button { width: min(280px, 84vw); margin-top: 20px; }
 
   .defeat-card { width: 100%; max-height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 20px); overflow-y: auto; padding: 20px 12px; }
-  .laughing-mercury { margin-bottom: 20px; }
+  .laughing-moon { margin-bottom: 20px; }
   .defeat-card blockquote { margin: 18px auto 22px; }
 }
 
@@ -997,7 +1530,7 @@ button:focus-visible, input:focus-visible {
 .weapon-book { width: min(760px, 94vw); max-height: calc(100dvh - 28px); overflow-y: auto; padding: 28px; border: 2px solid #626075; border-left: 10px solid #3c394c; border-radius: 5px 14px 14px 5px; background: linear-gradient(90deg, #11111b, #20202c 3%, #13131e 9%, #171722); box-shadow: 5px 5px 0 #08080f, 8px 8px 0 #777182, 11px 11px 0 #171722; }
 .weapon-book h2 { font-size: clamp(.7rem, 3vw, 1.1rem); letter-spacing: 4px; margin-bottom: 24px; }
 .weapon-book .loadout-section[hidden], .weapon-book [hidden] { display: none !important; }
-.weapon-book .loadout-section { margin: 0; }
+.weapon-book .loadout-section { margin: 0; padding: 0; border: 0; background: none; }
 .weapon-book .loadout-section h3 { display: none; }
 .weapon-book .weapon-grid { display: flex; align-items: flex-end; gap: 6px; padding: 10px 10px 0; min-height: 138px; border-bottom: 7px solid #666074; background: repeating-linear-gradient(90deg, transparent 0 75px, #ffffff04 76px 77px), #090910; box-shadow: 0 6px 0 #07070e; overflow-x: auto; }
 .weapon-book .weapon-tile { position: relative; flex: 0 0 clamp(48px, 11vw, 76px); width: auto; min-height: 120px; height: 120px; padding: 14px 3px 10px; border: 1px solid var(--loadout-color); border-left: 5px solid var(--loadout-color); border-radius: 5px 5px 0 0; background: linear-gradient(90deg, rgba(var(--loadout-rgb), .18), #171722 30%, rgba(var(--loadout-rgb), .12)); display: flex; flex-direction: column; justify-content: space-around; align-items: center; transition: transform .2s ease, box-shadow .2s ease; }
@@ -1023,8 +1556,13 @@ button:focus-visible, input:focus-visible {
 .book-navigation button:disabled { opacity: .25; cursor: default; transform: none; }
 .book-navigation button span { font: 24px system-ui; vertical-align: middle; }
 .controls-card, .pause-card, .defeat-card { max-height: calc(100dvh - 28px); overflow-y: auto; }
+/* Leaves the top of the screen to the canvas portrait and starts directly under
+   it, so the title reads as the planet's line rather than floating at the bottom
+   of the screen. */
+.defeat-card { margin-top: 43dvh; max-height: 54dvh; scrollbar-width: none; -ms-overflow-style: none; }
+.defeat-card::-webkit-scrollbar { width: 0; height: 0; }
 .boss-intro { padding: 16px; }
-.boss-intro .mercury-name { color: #c2c0c8; }
+.boss-intro .moon-name { color: #c2c0c8; }
 .boss-intro button { border-color: #c2c0c8; }
 .boss-intro button:hover { background: #c2c0c8; }
 .reward-reveal { padding: 24px 10px; margin: 18px 0; border: 1px solid #686572; border-radius: 8px; background: #101018; }
@@ -1035,12 +1573,12 @@ button:focus-visible, input:focus-visible {
 .reward-lock::after { content: ""; position: absolute; left: 20px; top: 11px; width: 5px; height: 13px; background: #15131e; border-radius: 5px; }
 .reward-reveal + .victory-loadout[hidden] { display: none; }
 @keyframes rewardUnlock { 0%, 25% { transform: none; } 65%, 100% { transform: translateY(-8px) rotate(32deg); } }
-.dead-mouth { animation: mercuryPant 1.8s ease-in-out infinite; }
-.laughing-mercury { animation: mercuryGloat 1.6s ease-in-out infinite; }
-.laugh-mouth { transform-origin: center top; animation: mercuryChuckle 1.6s ease-in-out infinite; }
-@keyframes mercuryGloat { 0%, 100% { transform: rotate(-3deg) translateY(0); } 22%, 48% { transform: rotate(2deg) translateY(-6px) scale(1.03, .97); } 35%, 62% { transform: rotate(-1deg) translateY(-2px); } }
-@keyframes mercuryChuckle { 0%, 75%, 100% { transform: scaleY(.72); } 22%, 48% { transform: scaleY(1.06); } 35%, 62% { transform: scaleY(.85); } }
-@keyframes mercuryPant { 0%, 100% { scale: 1 1; } 50% { scale: 1.05 .88; } }
+.dead-mouth { animation: moonPant 1.8s ease-in-out infinite; }
+.laughing-moon { animation: moonGloat 1.6s ease-in-out infinite; }
+.laugh-mouth { transform-origin: center top; animation: moonChuckle 1.6s ease-in-out infinite; }
+@keyframes moonGloat { 0%, 100% { transform: rotate(-3deg) translateY(0); } 22%, 48% { transform: rotate(2deg) translateY(-6px) scale(1.03, .97); } 35%, 62% { transform: rotate(-1deg) translateY(-2px); } }
+@keyframes moonChuckle { 0%, 75%, 100% { transform: scaleY(.72); } 22%, 48% { transform: scaleY(1.06); } 35%, 62% { transform: scaleY(.85); } }
+@keyframes moonPant { 0%, 100% { scale: 1 1; } 50% { scale: 1.05 .88; } }
 @media (max-width: 480px) {
   .weapon-book { padding: 24px 12px 14px; border-left-width: 6px; }
   .book-description { font-size: .48rem; }
@@ -1056,24 +1594,65 @@ button:focus-visible, input:focus-visible {
 }
 @media (prefers-reduced-motion: reduce) {
   .reward-lock::before { animation-duration: .01ms; animation-delay: 0s; }
-  .dead-mouth, .dead-tongue, .laughing-mercury, .laugh-mouth { animation: none; }
+  .dead-mouth, .dead-tongue, .laughing-moon, .laugh-mouth { animation: none; }
 }
 
 /* Narrow bindings face the player; the covers extend back into the shelf. */
 .weapon-book { border: 3px solid #625965; border-left-width: 3px; border-radius: 4px; background: #14121c; box-shadow: 0 8px 0 #08070d, inset 0 0 0 5px #201c28; }
 .weapon-book h2 { font-family: Bangers, Impact, sans-serif; font-size: clamp(1.8rem, 6vw, 2.6rem); letter-spacing: 3px; color: #eee7dc; margin-bottom: 18px; }
-.weapon-book .weapon-grid { gap: 7px; padding: 22px 15px 0; min-height: 188px; border: 6px solid #54434a; border-top-width: 12px; border-bottom: 12px solid #806570; border-radius: 3px; background: linear-gradient(#05050b, #19131c); box-shadow: inset 0 12px 18px #000b, 0 5px 0 #2b202c; }
+/* The shelf itself: a lit cabinet, not a flat black rectangle. The frame is a
+   single border painted by a vertical gradient (border-image), so the top plank
+   catches light, the sides fall away and the front lip picks it back up. The
+   back panel gets a warm pool of light from the top edge plus an inset vignette,
+   which is what keeps the empty half of the shelf reading as depth. */
+.weapon-book .weapon-grid { position: relative; gap: 7px; padding: 26px 18px 0; min-height: 196px; border-radius: 0;
+  /* Lit from the front: the top plank is the underside of the shelf above and
+     sits in shadow, the cheeks fall off to the sides, and the front board
+     catches the light. A gradient border-image was tried first and flattens --
+     a 1px slice stretches one sample down each side, so the gradient is lost. */
+  /* Planks are the ship colour cut into wood, so the cabinet re-skins with the
+     rest of the theme instead of sitting in it as a stray mauve object. */
+  /* Depth comes from the VALUE gap between the planks, not the hue: the theme
+     only tints wood that is already near-black on top and near-white on the
+     front board. Mixing them all at a similar strength -- the first attempt --
+     lands every face on one mid tone and the shelf reads flat. */
+  border-top: 13px solid color-mix(in srgb, var(--theme) 17%, #251d29); border-left: 8px solid color-mix(in srgb, var(--theme) 24%, #40333d); border-right: 8px solid color-mix(in srgb, var(--theme) 24%, #40333d); border-bottom: 18px solid color-mix(in srgb, var(--theme) 52%, #9c8c94);
+  background: radial-gradient(135% 85% at 50% -8%, rgba(var(--theme-rgb), .17), rgba(var(--theme-rgb), .055) 45%, transparent 68%), linear-gradient(0deg, rgba(var(--theme-rgb), .1), transparent 24%), linear-gradient(#05040a 0 14%, #0f0c17 56%, #1a1426 100%);
+  box-shadow:
+    /* hard bevel lines first: the lit top edge of the front board, and the dark
+       edge the top plank casts into the box. These two do most of the 3D. */
+    inset 0 -3px 0 rgba(255, 255, 255, .3), inset 0 4px 0 rgba(0, 0, 0, .9),
+    inset 0 18px 22px rgba(0, 0, 0, .85), inset 0 -16px 22px rgba(0, 0, 0, .5),
+    inset 18px 0 26px rgba(0, 0, 0, .6), inset -18px 0 26px rgba(0, 0, 0, .6),
+    /* then the cabinet's own body: a thin dark edge, the board's underside, and
+       the shadow it throws on the page. */
+    0 0 0 2px #100d15, 0 10px 0 color-mix(in srgb, var(--theme) 16%, #241c28), 0 11px 0 #0c0a11, 0 20px 28px rgba(0, 0, 0, .65), 0 0 34px rgba(var(--theme-rgb), .1); }
+/* Contact shadow where the spines meet the board. Absolute, so it leaves the
+   flex flow, and on ::before so the positioned tiles still paint over it. */
+.weapon-book .weapon-grid::before { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 26px; background: linear-gradient(rgba(0, 0, 0, 0), rgba(0, 0, 0, .75)); pointer-events: none; }
 .weapon-book .weapon-tile { flex: 0 0 44px; width: 44px; min-height: 142px; height: 142px; padding: 0; justify-content: center; border: 1px solid rgba(0,0,0,.55); border-left: 2px solid rgba(255,255,255,.35); border-right: 3px solid rgba(0,0,0,.6); border-radius: 7px 5px 1px 1px; background: linear-gradient(90deg, rgba(0,0,0,.45), rgba(0,0,0,0) 22%, rgba(255,255,255,.32) 42%, rgba(255,255,255,.08) 60%, rgba(0,0,0,.45)), var(--loadout-color); box-shadow: inset 2px 0 0 #ffffff2e, 3px 0 0 #050509, 0 0 10px rgba(var(--loadout-rgb), .35); }
 .weapon-book .weapon-tile:nth-child(n) { height: 142px; min-height: 142px; }
 .weapon-book .weapon-tile::before, .weapon-book .weapon-tile::after { content: ""; position: absolute; left: 3px; right: 3px; height: 5px; border-top: 1px solid rgba(0,0,0,.6); border-bottom: 1px solid rgba(255,255,255,.5); opacity: 1; }
 .weapon-book .weapon-tile::before { top: 14px; }
 .weapon-book .weapon-tile::after { bottom: 15px; }
 .weapon-book .weapon-tile .projectile-preview { width: 58px; height: 48px; transform: scale(.58); opacity: 1; filter: brightness(0) invert(1) drop-shadow(0 0 3px rgba(0,0,0,.8)); }
-.weapon-book .weapon-tile.locked .projectile-preview { opacity: .45; }
+/* Lifted clear of the padlock below it, so a locked spine still shows both
+   what the reward is and that you cannot have it yet. */
+.weapon-book .weapon-tile.locked .projectile-preview { opacity: .5; transform: translateY(-11px) scale(.58); }
+/* On the spine, everything is flattened to a single white silhouette, so any
+   preview built from a filled badge plus a same-colour detail on top (like
+   first-aid's cross) loses the detail entirely — both layers turn solid white
+   and merge into one blob. Drop the badge here and let the detail alone be
+   the silhouette, same as tech0-preview already does. */
+.weapon-book .weapon-tile .firstaid-preview::after { display: none; }
 .weapon-book .weapon-tile.selected { transform: translateY(-9px); outline: 1px solid var(--loadout-color); outline-offset: 2px; background: linear-gradient(90deg, rgba(0,0,0,.45), rgba(0,0,0,0) 22%, rgba(255,255,255,.32) 42%, rgba(255,255,255,.08) 60%, rgba(0,0,0,.45)), var(--loadout-color); box-shadow: inset 2px 0 0 #ffffff30, 3px 0 0 #050509, 0 0 18px rgba(var(--loadout-rgb), .75); }
 .weapon-book .weapon-tile:not(.selected):hover { transform: translateY(-2px); }
 .weapon-book .weapon-tile .tile-badge { display: none; }
 .weapon-book .unlock-badge { top: auto; bottom: 29px; left: 1px; right: 1px; padding: 4px 0; font-size: .23rem; letter-spacing: 0; }
+/* The armory spine gets the same padlock as the menu swatches, sat just above
+   the LOCKED bar. The spine keeps its colour and its silhouette — the lock is
+   the state, the colour and shape are still what tells you which reward it is. */
+.weapon-book .weapon-tile.locked .unlock-badge::after { content: ""; position: absolute; left: 50%; bottom: 20px; width: 14px; height: 17px; margin-left: -7.5px; background: var(--padlock) center/contain no-repeat; filter: drop-shadow(0 1px 0 rgba(0, 0, 0, .5)); }
 .book-name { font-family: Bangers, Impact, sans-serif; font-weight: 400; font-size: clamp(1.6rem, 5vw, 2.2rem); letter-spacing: 2px; }
 .book-navigation button { position: relative; padding: 12px 16px; border-radius: 2px; background: #29232f; border: 1px solid #8c7e91; }
 .book-navigation button::after { content: ""; position: absolute; right: 0; bottom: 0; width: 12px; height: 12px; background: linear-gradient(135deg, #aba0b0 50%, #14121c 51%); }
@@ -1082,19 +1661,32 @@ button:focus-visible, input:focus-visible {
 .game-ui .game-over-message { color: #ff4f5f; text-shadow: 4px 4px 0 #470c19, 0 0 22px #ff304b55; }
 /* lifts the words to the top of the centred stack; the buttons occupy the rest */
 .game-ui .game-over-message { transform: translateY(-65px); }
-.reward-screen { display: none; position: fixed; inset: 0; z-index: 19; background: radial-gradient(ellipse at center, #262333, #08080e 72%); color: #efedf3; align-items: center; justify-content: center; padding: 20px; text-align: center; }
+/* The Moon's pay-off happens where the fight happened: the canvas keeps drawing
+   the chapter's star field (celebrationScene), so the screen is a scrim over it
+   rather than an opaque slab. */
+.reward-screen { display: none; position: fixed; inset: 0; z-index: 19; background: radial-gradient(ellipse at 50% 42%, rgba(8, 8, 16, .3), rgba(3, 3, 8, .88) 78%); color: #efedf3; align-items: center; justify-content: center; padding: 16px; text-align: center; }
 .reward-screen.visible { display: flex; }
-.reward-screen-card { width: min(540px, 100%); max-height: calc(100dvh - 40px); overflow-y: auto; padding: 24px 12px; font-family: var(--pixel), monospace; }
+.reward-screen-card { width: min(520px, 100%); max-height: calc(100dvh - 32px); overflow-y: auto; scrollbar-width: none; -ms-overflow-style: none; padding: 20px 18px 22px; font-family: var(--pixel), monospace; border: 3px solid rgba(var(--theme-rgb), .45); background: rgba(4, 3, 9, .72); box-shadow: 0 0 0 3px rgba(0, 0, 0, .85), 0 0 34px rgba(var(--theme-rgb), .18), inset 0 0 46px rgba(var(--theme-rgb), .05); }
+/* These panels still scroll on a short viewport, but an OS scrollbar down the
+   edge of an arcade cabinet reads as a web page — every one of them is a screen,
+   not a document. Hidden, not disabled: wheel, touch and the arrow-key spatial
+   navigation all still reach the content. */
+.reward-screen-card, .victory-card, .title-block, .weapon-book, .controls-card, .changelog-card { scrollbar-width: none; -ms-overflow-style: none; }
+.reward-screen-card::-webkit-scrollbar, .victory-card::-webkit-scrollbar, .title-block::-webkit-scrollbar,
+.weapon-book::-webkit-scrollbar, .controls-card::-webkit-scrollbar, .changelog-card::-webkit-scrollbar { width: 0; height: 0; }
 .reward-eyebrow { font-size: .55rem; line-height: 2; color: #bcb7c9; }
-.reward-screen .reward-lock { margin-top: 52px; margin-bottom: 30px; }
-.reward-screen h2 { font-family: Bangers, Impact, sans-serif; font-size: clamp(2.4rem, 8vw, 4rem); letter-spacing: 5px; margin: 20px 0; }
+.reward-screen .reward-lock { margin-top: 58px; margin-bottom: 18px; }
+.reward-screen h2 { font-family: Bangers, Impact, sans-serif; font-size: clamp(2rem, 7vw, 3.2rem); letter-spacing: 5px; margin: 10px 0 16px; color: #fff; text-shadow: 4px 4px 0 rgba(0, 0, 0, .9), 0 0 26px rgba(var(--theme-rgb), .5); }
 .reward-items { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-.reward-items > div { border: 2px solid #4f485b; background: #121019; padding: 24px 8px; }
-.reward-items .projectile-preview { margin: 0 auto 20px; }
+/* Translucent, not an opaque plate: an opaque panel is lighter than the card
+   behind it, which turns the grid gap between the two rewards into a black bar. */
+.reward-items > div { position: relative; border: 2px solid rgba(var(--theme-rgb), .35); background: linear-gradient(rgba(255, 255, 255, .06), rgba(255, 255, 255, .015)); padding: 16px 8px 14px; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .55); }
+.reward-items .projectile-preview { margin: 0 auto 14px; }
 .reward-items h3 { font-size: .66rem; line-height: 1.8; }
 .reward-items p { font-size: .4rem; line-height: 2; color: #aaa4b7; }
 .reward-items > div:first-child h3 { color: #63f7ff; }
 .reward-ship { display: block; width: 44px; height: 48px; margin: 0 auto 20px; background: linear-gradient(90deg, #888994, #e1e2e8 50%, #888994 51%, #b9b9c0); clip-path: polygon(50% 0, 100% 100%, 50% 78%, 0 100%); }
+.reward-ship.magma { background: linear-gradient(90deg, #7a2410, #ffaa5a 50%, #7a2410 51%, #ff5040); box-shadow: 0 0 16px rgba(255, 80, 64, 0.5); }
 .reward-items > div { display: flex; flex-direction: column; align-items: center; }
 .reward-items > div p { margin-bottom: 0; }
 /* Grey, deliberately understated next to the CONTINUE button: equipping the
@@ -1102,11 +1694,10 @@ button:focus-visible, input:focus-visible {
 .reward-equip { margin-top: auto; padding: 9px 16px; border: 2px solid #6d6d7a; background: #2a2a36; color: #d3d3de; font: .42rem var(--pixel), monospace; letter-spacing: 1px; cursor: pointer; }
 .reward-equip:hover, .reward-equip:focus-visible { border-color: #b9b9c0; background: #3a3a49; color: #fff; }
 .reward-equip.equipped { border-color: #b9b9c0; background: #b9b9c0; color: #14141c; }
-.reward-screen button#reward-continue { margin-top: 26px; padding: 18px 24px; font: .65rem var(--pixel), monospace; border: 2px solid #b9b9c0; background: #b9b9c0; color: #101018; cursor: pointer; }
+.reward-screen button#reward-continue { margin-top: 20px; padding: 15px 30px; font: .62rem var(--pixel), monospace; letter-spacing: 3px; border: 3px solid var(--theme); background: var(--theme); color: #05060a; cursor: pointer; transition: transform .08s steps(2), filter .15s ease; }
+.reward-screen button#reward-continue:hover:not(:disabled) { transform: translate(3px, 3px); filter: brightness(1.15); }
 .reward-screen button#reward-continue:disabled { opacity: .25; cursor: default; }
 .reward-equip.equipped:hover, .reward-equip.equipped:focus-visible { background: #cdced5; }
-.reward-screen.visible .reward-items { animation: rewardItemsIn .6s 1s both; }
-@keyframes rewardItemsIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .reward-screen.visible .reward-items { animation: none; } }
 
 #loadout-readout, #loadout-summary-text { text-shadow: none; }
@@ -1133,7 +1724,7 @@ button:focus-visible, input:focus-visible {
 }
 @media (prefers-reduced-motion: reduce) { .book-detail .book-art .projectile-preview { animation: none; } }
 
-.weapon-book .weapon-grid { padding-bottom: 5px; }
+.weapon-book .weapon-grid { padding-bottom: 6px; }
 .weapon-book .weapon-tile { border-width: 2px; }
 .weapon-book .weapon-tile:hover, .weapon-book .weapon-tile:focus-visible, .weapon-book .weapon-tile.selected {
   border: 2px solid rgba(0,0,0,.55);
@@ -1161,6 +1752,7 @@ button:focus-visible, input:focus-visible {
 .hud-loadout .charge-preview { --icon-scale: .7; }
 .hud-loadout .cone-preview { --icon-scale: .62; }
 .hud-loadout .tech0-preview { --icon-scale: .5; }
+.hud-loadout .magma-preview { --icon-scale: .55; }
 .hud-loadout .bomb-preview { --icon-scale: .6; }
 .hud-loadout .shield-preview { --icon-scale: .39; }
 .hud-loadout .lance-preview { --icon-scale: .4; }
@@ -1202,45 +1794,103 @@ button:focus-visible, input:focus-visible {
 .loading-text small { font-size: .6em; color: #b9b9c8; }
 .reward-eyebrow { display: flex; align-items: center; justify-content: center; gap: 12px; font-family: Bangers, Impact, sans-serif; font-size: clamp(1.7rem, 6vw, 2.6rem); letter-spacing: 2px; line-height: 1.2; color: #d5d5df; }
 .reward-gift { width: 42px; height: 42px; flex-shrink: 0; }
-/* All grey steel: body, shackle and glint. The old one was a gold padlock with
-   a single lift-and-rotate, which read as a stock icon rather than as something
-   giving way. This one strains against the latch twice, snaps open, and drops
-   the body a little as the tension goes out of it. */
-.reward-screen .reward-lock { position: relative; width: 66px; height: 52px; margin-top: 64px; border: 2px solid #d9dade; border-radius: 9px; background: linear-gradient(150deg, #e7e8ec 0 18%, #b3b4bc 46%, #86878f 74%, #6a6b73); box-shadow: inset 0 -6px 0 rgba(30, 30, 36, .34), inset 0 3px 0 rgba(255, 255, 255, .38), 0 8px 18px rgba(0, 0, 0, .45); animation: lockBodySettle 1.9s cubic-bezier(.25, .8, .25, 1) both; }
-.reward-screen .reward-lock::before { left: 11px; top: -36px; width: 42px; height: 40px; border: 7px solid #c9cad2; border-bottom: 0; border-radius: 26px 26px 0 0; transform-origin: 36px 38px; animation: lockShackle 1.9s cubic-bezier(.3, .7, .2, 1) both; }
-.reward-screen .reward-lock::after { left: 26px; top: 15px; width: 11px; height: 21px; background: #3f4046; clip-path: polygon(0 0, 100% 0, 100% 45%, 65% 60%, 80% 100%, 20% 100%, 35% 60%, 0 45%); animation: lockKeyhole 1.9s ease-out both; }
-@keyframes lockShackle {
-  0%, 16% { transform: translateY(0) rotate(0); }
-  22% { transform: translateY(-3px) rotate(0); }
-  28% { transform: translateY(0) rotate(0); }
-  36% { transform: translateY(-3px) rotate(0); }
-  44% { transform: translateY(0) rotate(0); }
-  62% { transform: translateY(-13px) rotate(0); }
-  100% { transform: translateY(-11px) rotate(46deg); }
+/* Moon reward cinematic, in four beats: the lock strains against the latch
+   three times while the keyhole heats, the shackle snaps open with a shockwave,
+   the UNLOCKED title slams in, and the rewards pop onto the shelf one by one.
+   Timed sounds for each beat are scheduled in showVictory. */
+/* The padlock is a sprite, not a render: flat plates, a 3px black outline, CRT
+   scanlines across the steel, and every beat cut with steps() so it reads as
+   animation frames rather than a CSS ease. The beat positions line up with the
+   foley scheduled in openRewardScreen (200 / 500 / 800ms strains, 1000ms snap)
+   over the shared 2.4s timeline. */
+.reward-screen .reward-lock { position: relative; display: block; width: 74px; height: 58px; border: 0; border-radius: 7px; background: repeating-linear-gradient(to bottom, rgba(0, 0, 0, .2) 0 2px, rgba(255, 255, 255, .05) 2px 4px), linear-gradient(#eff0f6 0 30%, #c2c3ce 30% 62%, #85868f 62%); box-shadow: inset 0 2px 0 rgba(255, 255, 255, .55), inset 0 -3px 0 rgba(0, 0, 0, .3), 0 6px 16px rgba(0, 0, 0, .5); animation: lockStrain 2.4s cubic-bezier(.34, .1, .3, 1) both; }
+.reward-screen .reward-lock::before { content: ""; position: absolute; left: 15px; top: -34px; width: 44px; height: 38px; border: 8px solid #d3d4de; border-bottom: 0; border-radius: 22px 22px 0 0; transform-origin: 38px 36px; filter: drop-shadow(0 2px 3px rgba(0, 0, 0, .55)); animation: lockShackle 2.4s cubic-bezier(.3, .8, .25, 1) both; }
+.reward-screen .reward-lock::after { content: ""; position: absolute; left: 30px; top: 16px; width: 14px; height: 24px; border-radius: 0; background: #2b2c33; clip-path: polygon(0 0, 100% 0, 100% 42%, 64% 58%, 82% 100%, 18% 100%, 36% 58%, 0 42%); animation: lockKeyhole 2.4s ease-out both; }
+/* The burst: three hard square rings thrown off the latch. */
+.reward-screen .reward-lock b { position: absolute; left: 50%; top: 42%; width: 40px; height: 40px; margin: -20px 0 0 -20px; border: 3px solid #fff; border-radius: 50%; opacity: 0; animation: lockBurst 2.4s cubic-bezier(.15, .7, .3, 1) both; }
+@keyframes lockStrain {
+  0%, 6% { transform: translate(0, 0) rotate(0); }
+  8.4% { transform: translate(-3px, 2px) rotate(-3deg); }
+  13% { transform: translate(0, 0) rotate(0); }
+  20.8% { transform: translate(3px, 2px) rotate(3deg); }
+  26% { transform: translate(0, 0) rotate(0); }
+  33.3% { transform: translate(-3px, 3px) rotate(-3.5deg); }
+  38% { transform: translate(0, 0) rotate(0); }
+  41.6% { transform: translate(0, -7px) rotate(0); filter: brightness(2.6); }
+  46% { transform: translate(0, 3px) rotate(0); filter: brightness(1.4); }
+  52%, 100% { transform: translate(0, 0) rotate(0); filter: none; }
 }
-@keyframes lockBodySettle {
-  0%, 16% { transform: translateY(0) rotate(0); }
-  22%, 36% { transform: translateY(1px) rotate(-1.5deg); }
-  28%, 44% { transform: translateY(0) rotate(1.5deg); }
-  62% { transform: translateY(-2px) rotate(0); box-shadow: inset 0 -6px 0 rgba(30, 30, 36, .34), inset 0 3px 0 rgba(255, 255, 255, .38), 0 0 34px rgba(226, 227, 233, .85), 0 8px 18px rgba(0, 0, 0, .45); }
-  100% { transform: translateY(3px) rotate(0); }
+@keyframes lockShackle {
+  0%, 6% { transform: translate(0, 0) rotate(0); }
+  8.4%, 20.8%, 33.3% { transform: translate(0, -4px) rotate(0); }
+  13%, 26%, 38% { transform: translate(0, 0) rotate(0); }
+  41.6% { transform: translate(3px, -15px) rotate(16deg); }
+  47% { transform: translate(6px, -8px) rotate(38deg); }
+  54%, 100% { transform: translate(5px, -10px) rotate(32deg); }
 }
 @keyframes lockKeyhole {
-  0%, 55% { background: #3f4046; }
-  62% { background: #ffffff; }
-  100% { background: #55565e; }
+  0%, 6% { background: #2b2c33; box-shadow: none; }
+  20.8% { background: #a4471c; box-shadow: 0 0 8px rgba(255, 140, 40, .7); }
+  33.3% { background: #ffb03a; box-shadow: 0 0 14px rgba(255, 176, 58, .9); }
+  41.6% { background: #ffffff; box-shadow: 0 0 22px rgba(255, 255, 255, 1); }
+  54%, 100% { background: var(--theme); box-shadow: 0 0 12px rgba(var(--theme-rgb), .8); }
 }
-@media (prefers-reduced-motion: reduce) { .reward-screen .reward-lock, .reward-screen .reward-lock::before, .reward-screen .reward-lock::after { animation: none; } .reward-screen .reward-lock::before { transform: translateY(-11px) rotate(46deg); } }
+@keyframes lockBurst {
+  0%, 41.5% { opacity: 0; width: 44px; height: 44px; margin: -22px 0 0 -22px; }
+  42% { opacity: 1; width: 56px; height: 56px; margin: -28px 0 0 -28px; border-color: #fff; }
+  56% { opacity: .5; width: 150px; height: 150px; margin: -75px 0 0 -75px; border-color: var(--theme); }
+  70%, 100% { opacity: 0; width: 210px; height: 210px; margin: -105px 0 0 -105px; border-color: var(--theme); }
+}
+/* Full-screen snap flash + card punch, triggered by the .snap class at 1000ms. */
+#reward-screen.snap::before { content: ""; position: absolute; inset: 0; background: radial-gradient(ellipse at 50% 30%, rgba(255, 255, 255, .85), rgba(255, 255, 255, 0) 60%); animation: lockSnapFlash .38s ease-out both; pointer-events: none; }
+@keyframes lockSnapFlash { from { opacity: 1; } to { opacity: 0; } }
+#reward-screen.snap .reward-screen-card { animation: lockCardPunch .38s ease-out both; }
+@keyframes lockCardPunch { 0% { transform: scale(1); } 30% { transform: scale(1.022); } 100% { transform: scale(1); } }
+.reward-screen.visible h2 { animation: rewardTitleSlam .5s cubic-bezier(.2, 1.5, .35, 1) 1.25s both; }
+@keyframes rewardTitleSlam {
+  0% { opacity: 0; transform: scale(2.6); letter-spacing: 22px; text-shadow: 0 0 44px rgba(255, 255, 255, .9); }
+  60% { opacity: 1; transform: scale(0.94); }
+  100% { opacity: 1; transform: scale(1); }
+}
+.reward-screen.visible .reward-items > div { animation: rewardItemPop .45s cubic-bezier(.2, 1.6, .4, 1) both; }
+.reward-screen.visible .reward-items > div:nth-child(1) { animation-delay: 1.45s; }
+.reward-screen.visible .reward-items > div:nth-child(2) { animation-delay: 1.6s; }
+@keyframes rewardItemPop {
+  0% { opacity: 0; transform: scale(0) rotate(-8deg); box-shadow: 0 0 0 rgba(99, 247, 255, 0); }
+  70% { opacity: 1; transform: scale(1.06) rotate(1.5deg); box-shadow: 0 0 30px rgba(99, 247, 255, .5); }
+  100% { opacity: 1; transform: scale(1) rotate(0); }
+}
+.reward-screen button#reward-continue.ready { animation: rewardContinuePulse 1s ease-in-out infinite; }
+@keyframes rewardContinuePulse { 0%, 100% { box-shadow: 0 0 12px rgba(var(--theme-rgb), .5); } 50% { box-shadow: 0 0 30px rgba(var(--theme-rgb), .95); } }
+/* Venus reward variant: ember steel, ember gift, one centred item. The lock
+   cinematic keyframes are shared; only the palette changes. */
+.reward-screen.venus .reward-gift path:first-child { fill: #b05454; stroke: #f0c0c0; }
+.reward-screen.venus .reward-gift path:last-child { stroke: #f0c0c0; }
+.reward-screen.venus .reward-lock { background: repeating-linear-gradient(to bottom, rgba(0, 0, 0, .26) 0 2px, rgba(255, 255, 255, .06) 2px 4px), linear-gradient(#f3ded6 0 32%, #c07a62 32% 64%, #7c3a26 64%); }
+.reward-screen.venus .reward-lock::before { border-color: #dda893; border-bottom: 0; }
+.reward-screen.venus .reward-items h3 { color: #ff5040; }
+.reward-screen.venus button#reward-continue { border-color: #ff5040; background: #ff5040; }
+@media (prefers-reduced-motion: reduce) {
+  .reward-screen .reward-lock, .reward-screen .reward-lock::before, .reward-screen .reward-lock::after,
+  .reward-screen .reward-lock b,
+  #reward-screen.snap::before, #reward-screen.snap .reward-screen-card,
+  .reward-screen.visible h2, .reward-screen.visible .reward-items > div,
+  .reward-screen button#reward-continue.ready { animation: none; }
+  .reward-screen .reward-lock::before { transform: translate(5px, -11px) rotate(32deg); }
+  .reward-screen .reward-lock::after { background: var(--theme); }
+  .reward-screen .reward-lock b { display: none; }
+}
 
-/* Venus wears the same defeat card as Mercury, repainted in its own palette so
+/* Venus wears the same defeat card as the Moon, repainted in its own palette so
    the loss screen belongs to whichever planet actually won. */
-.mercury-defeat-screen.venus .laughing-mercury { border-color: #f4d69a; background: radial-gradient(circle at 35% 28%, #fff3d2 0 8%, #f0c579 30%, #c07d33 72%, #5c3113 100%); box-shadow: inset -17px -14px 20px rgba(50, 16, 0, .38), 0 0 34px rgba(255, 150, 50, .38); }
-.mercury-defeat-screen.venus .laughing-mercury::before, .mercury-defeat-screen.venus .laughing-mercury::after { background: rgba(120, 60, 20, .22); }
-.mercury-defeat-screen.venus .evil-brow { background: #3a1608; box-shadow: 0 2px 0 rgba(255, 140, 40, .38); }
-.mercury-defeat-screen.venus .laugh-eye { border-top-color: #ff8f28; filter: drop-shadow(0 0 5px rgba(255, 140, 30, .92)); }
-.mercury-defeat-screen.venus .laugh-mouth { border-color: #3a1608; background: #200b03; box-shadow: 0 0 12px rgba(255, 130, 30, .4); }
-.mercury-defeat-screen.venus .laugh-mouth i { background: #d08a4a; }
-.mercury-defeat-screen.venus .defeat-title { color: #ffab4a; text-shadow: 4px 4px 0 #4a2408, 0 0 24px rgba(255, 150, 50, .7); }
-.mercury-defeat-screen.venus .defeat-card button { color: #200b03; background: #ffab4a; border-color: #ffab4a; }
-.mercury-defeat-screen.venus .defeat-card button.ghost { color: #e6d2b4; background: transparent; border-color: #6b4a2a; }
-.mercury-defeat-screen.venus .defeat-card button.ghost:hover { color: #fff; border-color: #fff; }
+.moon-defeat-screen.venus .laughing-moon { border-color: #f4d69a; background: radial-gradient(circle at 35% 28%, #fff3d2 0 8%, #f0c579 30%, #c07d33 72%, #5c3113 100%); box-shadow: inset -17px -14px 20px rgba(50, 16, 0, .38), 0 0 34px rgba(255, 150, 50, .38); }
+.moon-defeat-screen.venus .laughing-moon::before, .moon-defeat-screen.venus .laughing-moon::after { background: rgba(120, 60, 20, .22); }
+.boss-intro.venus .moon-name { color: #ffab4a; text-shadow: 4px 4px 0 #3a1c06, 0 0 18px rgba(255, 150, 50, .5); }
+.moon-defeat-screen.venus .evil-brow { background: #3a1608; box-shadow: 0 2px 0 rgba(255, 140, 40, .38); }
+.moon-defeat-screen.venus .laugh-eye { border-top-color: #ff8f28; filter: drop-shadow(0 0 5px rgba(255, 140, 30, .92)); }
+.moon-defeat-screen.venus .laugh-mouth { border-color: #3a1608; background: #200b03; box-shadow: 0 0 12px rgba(255, 130, 30, .4); }
+.moon-defeat-screen.venus .laugh-mouth i { background: #d08a4a; }
+.moon-defeat-screen.venus .defeat-title { color: #ffab4a; text-shadow: 4px 4px 0 #4a2408, 0 0 24px rgba(255, 150, 50, .7); }
+.moon-defeat-screen.venus .defeat-card button { color: #200b03; background: #ffab4a; border-color: #ffab4a; }
+.moon-defeat-screen.venus .defeat-card button.ghost { color: #e6d2b4; background: transparent; border-color: #6b4a2a; }
+.moon-defeat-screen.venus .defeat-card button.ghost:hover { color: #fff; border-color: #fff; }
